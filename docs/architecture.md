@@ -25,6 +25,9 @@ internal/github/fake/      Runners in memory
 internal/secret/           the GitHub credential, from standard input or the secret mount
 internal/metrics/          Prometheus collectors
 internal/server/           HTTP: /metrics and /healthz; the admin endpoint (drain) on a loopback address
+deploy/chart/matchstick/   Helm chart: one replica, Recreate, Azure workload identity
+nix/                       the Nix package and the container image
+examples/                  configurations and a cloud-init runner image example
 ```
 
 `plan` imports only the standard library: no network, no clock, no randomness. `pool` depends on `plan` and the two

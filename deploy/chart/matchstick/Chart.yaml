@@ -1,0 +1,9 @@
+apiVersion: v2
+name: matchstick
+description: Ephemeral GitHub Actions runners, one fresh cloud VM per job
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/fakta-ai/matchstick
+sources:
+  - https://github.com/fakta-ai/matchstick

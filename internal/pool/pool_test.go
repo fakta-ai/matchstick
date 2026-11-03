@@ -308,6 +308,34 @@ func TestMachinesThatNeverRegisterPauseCreation(t *testing.T) {
 	w.expectMachines(3)
 }
 
+func TestSuccessiveMachinesThatNeverConnectPauseCreation(t *testing.T) {
+	w := newWorld(t)
+	w.pool.SetDemand(1)
+	for range 3 {
+		w.round() // creates one machine, its JIT registration stays offline
+		for _, m := range w.machineList() {
+			w.machines.SetState(m.Name, plan.Running)
+		}
+		w.clock.advance(11 * time.Minute)
+	}
+	w.round() // the third is deleted: creation pauses
+	if got := testutil.ToFloat64(w.metrics.CreationPaused.WithLabelValues("build")); got != 1 {
+		t.Fatalf("creation paused = %v, want 1", got)
+	}
+	w.expectMachines(0)
+}
+
+func TestDrainBeforeDemandIsKnown(t *testing.T) {
+	w := newWorld(t)
+	w.pool.SetDemand(1)
+	w.round()
+	w.boot()
+	w.restart()
+	w.pool.SetDraining(true)
+	w.round()
+	w.expectMachines(0)
+}
+
 func TestOrphanRegistrationIsRemoved(t *testing.T) {
 	w := newWorld(t)
 	// A crash between the registration and the machine leaves a registration with no machine.

@@ -287,19 +287,19 @@ func (p *Pool) pauseLocked(d time.Duration, why string) {
 }
 
 // trackUnregistered counts machines deleted in a row because they never registered, and pauses creation when
-// unregisteredLimit have. A machine that registers resets the count, and so does the pause.
+// unregisteredLimit have. A machine whose runner is online resets the count, and so does the pause.
 func (p *Pool) trackUnregistered(o plan.Observation, d plan.Decision) {
 	if o.Runners == nil {
 		return
 	}
-	registered := map[string]bool{}
+	connected := map[string]bool{}
 	for _, r := range o.Runners {
-		registered[r.Name] = true
+		connected[r.Name] = r.Online || r.Busy
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, m := range o.Machines {
-		if registered[m.Name] {
+		if connected[m.Name] {
 			p.unregistered = 0
 			break
 		}

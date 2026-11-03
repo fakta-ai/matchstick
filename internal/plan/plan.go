@@ -154,7 +154,7 @@ func Decide(o Observation, l Limits) Decision {
 		}
 	}
 
-	if o.Demand == nil {
+	if o.Demand == nil && !o.Draining {
 		d.Serving = len(serving)
 		return d
 	}

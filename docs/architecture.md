@@ -77,7 +77,7 @@ Counting:
 - `serving` = machines pending or running that no rule deletes.
 - `present` = every machine listed, in any state, including those being deleted.
 - creates = `min(wanted − serving, maximum − present)`, at least 0; none while demand is unknown or creation is paused.
-- surplus deletions happen only when demand is known.
+- surplus deletions happen only when demand is known or the pool drains.
 - machines being deleted are left alone but counted in `present`.
 - with the registration list unknown, the unregistered, orphan and surplus rules are skipped.
 
@@ -104,7 +104,7 @@ then on each `Wake` (from `SetDemand`, `SetDraining`) and each interval.
 Creation pauses, in memory:
 
 - after `ErrCapacity`: 2 minutes, doubling up to 30, reset by a successful creation;
-- after three machines in a row deleted as unregistered: 10 minutes; a machine whose runner registers resets the count.
+- after three machines in a row deleted as unregistered: 10 minutes; a machine whose runner is online resets the count.
 
 A new `Pool` over the same cloud and GitHub starts with demand unknown: its first round cleans up (finished, expired,
 unregistered, orphan) and creates nothing until demand is set.

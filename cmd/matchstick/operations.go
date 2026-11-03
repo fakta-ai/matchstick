@@ -87,14 +87,14 @@ func observe(ctx context.Context, in PoolsInput, each func(config.Pool, plan.Obs
 	if err != nil {
 		return err
 	}
-	b, err := newBackends(ctx, cfg)
+	b, err := newBackends(cfg, pools)
 	if err != nil {
 		return err
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry())
 	for _, pc := range pools {
-		be := b.pool(pc)
+		be := b[pc.Name]
 		p := pool.New(poolSettings(cfg, pc), be.machines, be.runners, m, log, now)
 		demand, err := be.demand(ctx)
 		if err != nil {

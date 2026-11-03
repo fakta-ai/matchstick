@@ -19,9 +19,9 @@ import (
 const (
 	// parallel is how many calls one round makes at once.
 	parallel = 4
-	// capacityBackoffMin and capacityBackoffMax bound the pause after the cloud reports no capacity.
-	capacityBackoffMin = 2 * time.Minute
-	capacityBackoffMax = 30 * time.Minute
+	// capacityBackoffFirst and capacityBackoffLongest bound the pause after the cloud reports no capacity.
+	capacityBackoffFirst   = 2 * time.Minute
+	capacityBackoffLongest = 30 * time.Minute
 	// unregisteredLimit machines in a row that never register pause creation for unregisteredPause.
 	unregisteredLimit = 3
 	unregisteredPause = 10 * time.Minute
@@ -273,7 +273,7 @@ func (p *Pool) paused() bool {
 func (p *Pool) pauseForCapacity() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.capacityBackoff = min(max(2*p.capacityBackoff, capacityBackoffMin), capacityBackoffMax)
+	p.capacityBackoff = min(max(2*p.capacityBackoff, capacityBackoffFirst), capacityBackoffLongest)
 	p.pauseLocked(p.capacityBackoff, "no capacity")
 }
 

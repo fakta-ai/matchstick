@@ -37,6 +37,9 @@
             pkgs.golangci-lint
             pkgs.govulncheck
             pkgs.kubernetes-helm
+            # the review gate's test (.github/tests/codex.sh)
+            pkgs.jq
+            pkgs.yq-go
           ];
         };
       });

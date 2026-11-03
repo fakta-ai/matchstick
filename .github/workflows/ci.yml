@@ -24,6 +24,9 @@ jobs:
             ~/.cache/go-build
           key: go-${{ hashFiles('go.sum') }}
           restore-keys: go-
+      # the review gate's one exception, Dependabot's flake.lock-only pull requests, against fixture pull requests
+      - name: codex gate
+        run: nix develop -c bash .github/tests/codex.sh
       # The flake's dev shell has the Go toolchain, golangci-lint and govulncheck.
       - name: vet
         run: nix develop -c go vet ./...

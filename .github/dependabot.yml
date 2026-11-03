@@ -1,0 +1,14 @@
+# A weekly pull request moving flake.lock's inputs, each to a commit at least 14 days old. One that changes only
+# flake.lock merges by itself once CI passes (workflows codex.yml and dependabot.yml).
+version: 2
+updates:
+  - package-ecosystem: nix
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    commit-message:
+      prefix: chore
+      include: scope

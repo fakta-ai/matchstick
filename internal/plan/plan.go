@@ -61,9 +61,9 @@ type Observation struct {
 	// Demand is the number of jobs assigned to the pool, waiting or running; nil until the listener's first report.
 	Demand *int `json:"demand"`
 	// Draining pools create nothing and give up their idle runners.
-	Draining bool `json:"draining"`
+	Draining bool `json:"draining,omitempty"`
 	// CreationPaused is set while the pool backs off after capacity errors or machines that never register.
-	CreationPaused bool `json:"creationPaused"`
+	CreationPaused bool `json:"creationPaused,omitempty"`
 }
 
 // Reason says why an action was decided.

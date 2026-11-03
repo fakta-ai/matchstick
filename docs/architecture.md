@@ -100,8 +100,8 @@ redacted.
 
 `matchstick run --config <file>` builds every pool, then runs each pool's loop and listener, and serves:
 
-- on `listen.metrics` (default `:9090`): `/metrics`, and `/healthz`, which fails once a pool has had no successful
-  round for three intervals (counted from the start before the first round);
+- on `listen.metrics` (default `:9090`): `/metrics`, and `/healthz`, which fails once a pool has gathered nothing for
+  three intervals plus five minutes (counted from the start before the first round);
 - on `listen.admin` (default `127.0.0.1:9091`): `GET /pools`, and `POST /pools/{pool}/drain` with
   `{"draining": true|false}`.
 
@@ -156,12 +156,13 @@ whatever GitHub answers.
    machines cannot be listed, the round does nothing. If the registrations cannot be listed, the round goes on with
    them unknown.
 2. **Decide**: `plan.Decide`.
-3. **Act**, at most four calls at once: registration removals and deletions, then creations. A deletion with a
+3. **Act**, at most four calls at once, for at most five minutes: registration removals and deletions, then creations. A deletion with a
    registration removes it first; a guarded one stops if GitHub refuses. A creation registers a runner under a new
    name, then creates the machine with its JIT configuration and an expiry of now plus the pool's maximum lifetime; if
    the cloud refuses, the registration is removed at once (the orphan rule removes it later if that fails too).
 
-Nothing is retried within a round; the next round observes again and plans again. `Pool.Run` runs a round at once,
+A drain or pause that begins during a round stops the creations it has not started. Nothing is retried within a
+round; the next round observes again and plans again. `Pool.Run` runs a round at once,
 then on each `Wake` (from `SetDemand`, `SetDraining`) and each interval.
 
 Creation pauses, in memory:

@@ -27,6 +27,9 @@ const (
 	unregisteredPause = 10 * time.Minute
 )
 
+// ActTimeout bounds the actions of one round; calls still running then are cancelled and planned again next round.
+const ActTimeout = 5 * time.Minute
+
 // Settings are one pool's settings.
 type Settings struct {
 	Instance    string
@@ -91,7 +94,7 @@ func (p *Pool) Draining() bool {
 	return p.draining
 }
 
-// LastSuccess returns when the last round that could see the pool's machines ended; zero before the first.
+// LastSuccess returns when the last round that could see the pool's machines gathered them; zero before the first.
 func (p *Pool) LastSuccess() time.Time {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -154,18 +157,19 @@ func (p *Pool) Round(ctx context.Context) (plan.Decision, error) {
 		p.metrics.Rounds.WithLabelValues(p.settings.Name, "failure").Inc()
 		return plan.Decision{}, err
 	}
+	p.mu.Lock()
+	p.lastSuccess = o.Now
+	p.mu.Unlock()
+	p.metrics.LastSuccess.WithLabelValues(p.settings.Name).Set(float64(o.Now.Unix()))
 	d := plan.Decide(o, p.settings.Limits)
 	p.report(o)
 	p.trackUnregistered(o, d)
-	p.act(ctx, d)
+	actCtx, cancel := context.WithTimeout(ctx, ActTimeout)
+	p.act(actCtx, d)
+	cancel()
 
-	end := p.now()
-	p.mu.Lock()
-	p.lastSuccess = end
-	p.mu.Unlock()
 	p.metrics.Rounds.WithLabelValues(p.settings.Name, "success").Inc()
-	p.metrics.RoundDuration.WithLabelValues(p.settings.Name).Observe(end.Sub(start).Seconds())
-	p.metrics.LastSuccess.WithLabelValues(p.settings.Name).Set(float64(end.Unix()))
+	p.metrics.RoundDuration.WithLabelValues(p.settings.Name).Observe(p.now().Sub(start).Seconds())
 	return d, nil
 }
 
@@ -189,10 +193,16 @@ func (p *Pool) act(ctx context.Context, d plan.Decision) {
 	}
 	wg.Wait()
 	for range d.Create {
-		if p.paused() {
+		limit <- struct{}{}
+		// A pause or a drain that began during this round stops the creations it has not started.
+		if p.paused() || p.Draining() {
+			<-limit
 			break
 		}
-		run(func() { p.create(ctx) })
+		wg.Go(func() {
+			defer func() { <-limit }()
+			p.create(ctx)
+		})
 	}
 	wg.Wait()
 }

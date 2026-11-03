@@ -88,7 +88,7 @@ func run(ctx context.Context, configPath string, secrets secretSource, log *slog
 	defer cancel()
 	interval := time.Duration(cfg.Interval)
 	servers := []*http.Server{
-		{Addr: cfg.Listen.Metrics, Handler: server.Metrics(reg, served, 3*interval, now),
+		{Addr: cfg.Listen.Metrics, Handler: server.Metrics(reg, served, 3*interval+pool.ActTimeout, now),
 			ReadHeaderTimeout: 10 * time.Second},
 		{Addr: cfg.Listen.Admin, Handler: server.Admin(served), ReadHeaderTimeout: 10 * time.Second},
 	}

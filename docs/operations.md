@@ -11,7 +11,8 @@ time: the next start finds every machine and registration again.
 
 ## Watching
 
-- `/healthz` on `listen.metrics`: 200 while every pool has completed a round within three intervals.
+- `/healthz` on `listen.metrics`: 200 while every pool has gathered its machines within three intervals plus five
+  minutes (a round's actions take at most five minutes).
 - `/metrics`: `matchstick_demand`, `matchstick_machines{state}`, `matchstick_runners{status}`,
   `matchstick_creations_total`, `matchstick_creation_failures_total{kind}`, `matchstick_deletions_total{reason}`,
   `matchstick_registration_removals_total{reason}`, `matchstick_rounds_total{result}`,

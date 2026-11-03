@@ -336,6 +336,35 @@ func TestDrainBeforeDemandIsKnown(t *testing.T) {
 	w.expectMachines(0)
 }
 
+// drainOnCreate is a provider that starts a drain when its first machine is created, as an operator's drain request
+// arriving mid-round would.
+type drainOnCreate struct {
+	*providerfake.Provider
+	pool *pool.Pool
+	once sync.Once
+}
+
+func (d *drainOnCreate) Create(ctx context.Context, spec provider.CreateSpec) error {
+	d.once.Do(func() { d.pool.SetDraining(true) })
+	return d.Provider.Create(ctx, spec)
+}
+
+func TestDrainStopsTheRoundsRemainingCreations(t *testing.T) {
+	w := newWorld(t)
+	machines := &drainOnCreate{Provider: w.machines}
+	big := settings
+	big.Limits.Maximum = 20
+	p := pool.New(big, machines, w.runners, w.metrics, slog.New(slog.NewTextHandler(io.Discard, nil)), w.clock.now)
+	machines.pool = p
+	p.SetDemand(20)
+	if _, err := p.Round(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(w.machineList()); n > 4 {
+		t.Errorf("%d machines created after the drain began; want at most the 4 already started", n)
+	}
+}
+
 func TestOrphanRegistrationIsRemoved(t *testing.T) {
 	w := newWorld(t)
 	// A crash between the registration and the machine leaves a registration with no machine.

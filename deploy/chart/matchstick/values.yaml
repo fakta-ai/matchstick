@@ -1,0 +1,39 @@
+image:
+  repository: ghcr.io/fakta-ai/matchstick
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# matchstick's configuration file (docs/configuration.md), without secrets. listen addresses are set by the chart.
+config:
+  instance: ci
+  pools: []
+
+# The Secret holding the GitHub credential: a key github-app-private-key (with config.github.app) or github-token.
+# Created outside the chart.
+githubSecret:
+  name: matchstick-github
+
+serviceAccount:
+  create: true
+  name: ""
+  # Azure workload identity: the client ID of the managed identity matchstick signs in as.
+  azureClientID: ""
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    memory: 256Mi
+
+metrics:
+  port: 9090
+  service:
+    enabled: true
+
+podAnnotations: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}

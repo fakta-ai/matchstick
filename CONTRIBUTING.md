@@ -12,16 +12,21 @@ Thank you for helping.
 
 ## Setting up
 
-You need Go (the version in `go.mod`) and [golangci-lint](https://golangci-lint.run/) v2.
+With [Nix](https://nixos.org/), `nix develop` gives a shell with Go, golangci-lint, govulncheck and Helm, and
+`nix build` builds both executables and runs the tests. Without Nix, you need Go (the version in `go.mod`) and
+[golangci-lint](https://golangci-lint.run/) v2.
 
 ```sh
 go vet ./...
 go test -race ./...
 golangci-lint run ./...
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+helm lint deploy/chart/matchstick
+nix build .#matchstick
 ```
 
-All four must pass; CI runs them on every pull request. Nothing needs a cloud account or a GitHub App: the tests use
+CI runs these on every pull request, in the flake's dev shell. When `go.sum` changes, update `vendorHash` in
+`nix/package.nix` (`nix build` prints the right one). Nothing needs a cloud account or a GitHub App: the tests use
 in-memory fakes, and `matchstick plan --config examples/fake.yaml` runs the planner against a fake pool.
 
 ## How the code is organised

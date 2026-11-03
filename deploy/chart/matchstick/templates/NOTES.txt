@@ -1,0 +1,9 @@
+matchstick runs as one replica: {{ include "matchstick.fullname" . }}.
+
+Look at the pools:
+  kubectl exec deploy/{{ include "matchstick.fullname" . }} -- matchstick status --config /etc/matchstick/matchstick.yaml
+
+Drain a pool (until the pod restarts):
+  kubectl exec deploy/{{ include "matchstick.fullname" . }} -- matchstick drain --config /etc/matchstick/matchstick.yaml --pool <pool>
+
+Metrics and health: port {{ .Values.metrics.port }}, /metrics and /healthz.

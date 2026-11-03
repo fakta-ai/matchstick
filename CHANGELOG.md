@@ -27,3 +27,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 - `docs/configuration.md`, `docs/operations.md`, `examples/azure.yaml`.
 - `matchstick-adapter rpc` and `matchstick-adapter mcp`: the operations over JSON-RPC 2.0 and MCP on standard input and
   output, running the `matchstick` command line for each call.
+- `docs/image-contract.md` and `examples/cloud-init.yaml`: what a runner image does with the JIT configuration.
+- A Helm chart, `deploy/chart/matchstick`: one replica, `Recreate`, Azure workload identity, the GitHub credential
+  from a Secret.
+- A Nix flake: the package, a dev shell, checks, and the container image (no shell, non-root).
+- The release workflow: a version tag publishes binaries for Linux and macOS and `ghcr.io/fakta-ai/matchstick`.

@@ -6,14 +6,17 @@ rules for people; this file is the short form. How it is built: [docs/architectu
 ## Build and check
 
 ```sh
+nix develop                    # Go, golangci-lint, govulncheck, Helm
 go vet ./...
 go test -race ./...
 golangci-lint run ./...        # configuration in .golangci.yml
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+govulncheck ./...
+helm lint deploy/chart/matchstick
+nix build .#matchstick         # both executables; runs the tests; checks vendorHash
 ```
 
 CI runs exactly these on every pull request (`.github/workflows/ci.yml`, job `check`); `main` accepts changes only
-through pull requests whose `check` passed.
+through pull requests whose `check` passed. A change to `go.sum` updates `vendorHash` in `nix/package.nix`.
 
 ## Design rules
 

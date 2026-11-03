@@ -1,0 +1,50 @@
+#cloud-config
+# A runner image's side of matchstick's contract, for an Ubuntu image, as cloud-init custom data
+# (pool setting azure.customData). Baking the same files into the image at build time saves the download at boot.
+users:
+  - default
+  - name: actions
+    shell: /bin/bash
+write_files:
+  - path: /usr/local/bin/matchstick-runner
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Run GitHub's runner for exactly one job with the JIT configuration from the instance metadata, then power off.
+      set -uo pipefail
+      trap 'systemctl poweroff' EXIT
+      version=2.338.2
+      sha256=baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40
+      dir=/home/actions/actions-runner
+      if [ ! -x "$dir/run.sh" ]; then
+        mkdir -p "$dir"
+        curl -fsSL -o /tmp/runner.tar.gz \
+          "https://github.com/actions/runner/releases/download/v$version/actions-runner-linux-x64-$version.tar.gz"
+        echo "$sha256  /tmp/runner.tar.gz" | sha256sum -c - || exit 1
+        tar -xzf /tmp/runner.tar.gz -C "$dir"
+        chown -R actions:actions "$dir"
+      fi
+      for attempt in 1 2 3 4 5; do
+        jit=$(curl -fsS -H Metadata:true \
+          "http://169.254.169.254/metadata/instance/compute/userData?api-version=2021-01-01&format=text" | base64 -d) \
+          && [ -n "$jit" ] && break
+        sleep 5
+      done
+      [ -n "${jit:-}" ] || exit 1
+      runuser -u actions -- "$dir/run.sh" --jitconfig "$jit"
+  - path: /etc/systemd/system/matchstick-runner.service
+    content: |
+      [Unit]
+      Description=GitHub Actions runner for one job
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/bin/matchstick-runner
+
+      [Install]
+      WantedBy=multi-user.target
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, start, --no-block, matchstick-runner.service]

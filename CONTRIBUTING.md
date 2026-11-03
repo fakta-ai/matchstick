@@ -1,13 +1,13 @@
 # Contributing
 
-Thank you for helping. matchstick is small on purpose; changes that keep it small and clear are the most welcome.
+Thank you for helping.
 
 ## Before you start
 
 - For anything larger than a fix, open an issue first and describe the problem, so we can agree on the approach
   before you write code.
-- Read [docs/architecture.md](docs/architecture.md). Changes that add remembered state, a new long-lived
-  dependency or a new extension point need a reason there.
+- Read [docs/architecture.md](docs/architecture.md). A change that adds remembered state, a dependency or an
+  extension point is discussed in an issue first.
 - Security problems: see [SECURITY.md](SECURITY.md), not an issue.
 
 ## Setting up
@@ -29,7 +29,9 @@ in-memory fakes, and `matchstick plan --config examples/fake.yaml` runs the plan
 - The decisions are pure functions in `internal/plan`: they take what was observed and return what to do. Put new
   rules there, with table tests.
 - Everything that talks to the outside (cloud, GitHub, files, HTTP, the terminal) is a thin layer around them.
-- Interfaces exist only where there are two implementations. Please don't add options or hooks nobody uses yet.
+- Interfaces exist only where there are two implementations: `provider.Provider` (Azure and the in-memory fake) and
+  `github.Runners` (GitHub and its fake). Supporting another cloud means implementing `provider.Provider`: create,
+  list and delete one pool's machines. Please don't add options or hooks nobody uses yet.
 - Every operation is declared once with JSON Schemas for its input and output (`internal/op`); the command line and
   the `rpc`/`mcp` adapters are built from those declarations. A new operation or field starts there. Output fields are
   only ever added, never renamed or removed.

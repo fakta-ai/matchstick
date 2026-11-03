@@ -2,23 +2,18 @@
 
 matchstick gives every GitHub Actions job a fresh cloud virtual machine and deletes the machine when the job is done.
 It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, read again on
-every round. This document describes how it is built and why; it changes with the code.
+every round. This document describes how it is built, for people changing it.
 
-## The problem
+## What it does
 
-A self-hosted runner that serves many jobs carries state from one job to the next: files, caches, credentials,
-processes left running. A runner that serves exactly one job on a machine created for it and destroyed after it has
-none of that. Doing this by hand needs four things:
+1. It learns how many jobs are waiting for each pool's labels, through GitHub's runner scale sets: a listener holds a
+   long-poll session with GitHub, which reports the scale set's job statistics and offers jobs to acquire.
+2. It creates a machine for each job, carrying a just-in-time (JIT) runner configuration: a credential that registers
+   one runner for one job, after which GitHub removes the registration.
+3. It deletes each machine once its job is over, and every machine that went wrong on the way.
+4. It never runs more machines than a pool's maximum, nor any machine longer than the pool's maximum lifetime.
 
-1. know how many jobs are waiting for a set of labels;
-2. create a machine for each, carrying a credential that lets it register as a runner for one job only;
-3. delete each machine once its job is over, and every machine that went wrong on the way;
-4. bound the cost: never more machines than allowed, never a machine older than allowed.
-
-GitHub's runner scale sets provide the first two halves. A scale set is a named group of runners with labels; a
-listener holds a long-poll session with GitHub, which reports the scale set's job statistics and offers jobs to
-acquire. A just-in-time (JIT) runner configuration registers one runner that takes one job and is then removed by
-GitHub. The Go client `github.com/actions/scaleset` speaks this protocol. matchstick builds the rest: the machines.
+It uses the Go client `github.com/actions/scaleset` for the GitHub side.
 
 ## Concepts
 
@@ -45,6 +40,7 @@ internal/op/               the operations: names, JSON Schemas in and out, annot
 internal/cli/              the command-line adapter: flags, --input, --json, help, errors, exit codes
 internal/config/           the configuration file: types, defaults, validation
 internal/plan/             the decisions: a pure function from what was observed to what to do
+internal/naming/           machine and registration names: building them, reading owner, pool and age back
 internal/pool/             one pool's loop: gather, call plan, act; listener handling; drain
 internal/provider/         the Provider interface and the Machine type
 internal/provider/azure/   Provider on Azure virtual machines
@@ -116,10 +112,9 @@ The command line follows the conventions of [clig.dev](https://clig.dev/):
 
 ### rpc and mcp
 
-matchstick holds secrets (the GitHub credential) and can create machines with access to whatever their identity
-reaches, so the process that holds them carries as little third-party code as possible: the scale-set client, the Azure
-SDK, the Prometheus client, a YAML parser and a JSON Schema validator, each pinned in `go.mod` and checked by
-`govulncheck` in CI.
+The `matchstick` executable holds the secrets. Its third-party code is the scale-set client, the Azure SDK, the
+Prometheus client, a YAML parser and a JSON Schema validator, each pinned in `go.mod` and checked by `govulncheck` in
+CI.
 
 `matchstick-adapter rpc` (JSON-RPC 2.0, one message per line) and `matchstick-adapter mcp` (MCP over stdio, with the
 official Go SDK) live in a separate executable that never holds a secret. For each call it runs
@@ -138,8 +133,8 @@ Kubernetes Secret or systemd's credentials provide. Never from flags, environmen
 or output; logs and errors never contain one.
 
 On Azure there is no secret to hold: matchstick signs in with workload identity (Kubernetes), a managed identity (a
-VM), or the Azure CLI's sign-in (a workstation), tried in that order. The SDK's environment-variable client-secret path
-is deliberately not used.
+VM), or the Azure CLI's sign-in (a workstation), tried in that order. It does not read a client secret from
+environment variables.
 
 ## Interfaces
 
@@ -152,7 +147,7 @@ type Provider interface {
 	// An error wrapping ErrCapacity means the cloud has no room now (quota, capacity): retry later.
 	Create(ctx context.Context, spec CreateSpec) error
 	// List returns every machine of this pool, including ones half-created or being deleted.
-	List(ctx context.Context) ([]Machine, error)
+	List(ctx context.Context) ([]plan.Machine, error)
 	// Delete removes a machine and everything created with it. Deleting what is already gone succeeds.
 	Delete(ctx context.Context, name string) error
 }
@@ -163,13 +158,10 @@ type CreateSpec struct {
 	ExpiresAt time.Time // recorded on the machine; the plan deletes it after this time
 }
 
-type Machine struct {
-	Name      string
-	State     State // Pending, Running, Stopped, Failed or Deleting
-	CreatedAt time.Time
-	ExpiresAt time.Time
-}
 ```
+
+`plan.Machine` is the core's view of a machine: name, state (pending, running, stopped, failed, deleting), creation
+time and expiry.
 
 A provider is built for one pool with that pool's settings, so the interface carries no pool settings.
 
@@ -185,6 +177,10 @@ type GitHub interface {
 The scale-set client offers no way to list a scale set's runners, so `Runners` reads GitHub's REST runner list for
 the organisation, repository or enterprise the scale set belongs to, and keeps those whose names carry the pool's
 prefix. Each entry has GitHub's `status` (online or offline) and `busy` flag.
+
+The configuration chooses the implementations. Besides Azure and GitHub it accepts `fake`, which serves a pool's
+machines, registrations and demand from the configuration itself: `matchstick plan --config examples/fake.yaml`
+shows the planner at work without a cloud or a GitHub App. The tests use the same fakes.
 
 ## A round
 
@@ -218,7 +214,8 @@ machines) and skips the rest.
 
 `plan.Decide` is a pure function: it takes the observation (machines, registrations or "unknown", demand or
 "unknown", whether the pool is draining, whether creation is paused) with the pool's limits and the current time, and
-returns a list of actions with a reason each. It never calls anything; every rule below is a test of it.
+returns a decision: machines to delete and registrations to remove, each with a reason, and how many machines to
+create. It never calls anything; every rule below is a test of it.
 
 | Rule | Condition | Action |
 |---|---|---|
@@ -240,8 +237,8 @@ Counting:
 - surplus = `serving − wanted`, taken only from registrations that are online and not busy. None while demand is
   unknown.
 
-Removing a registration before deleting a machine is what makes scale-down safe: GitHub refuses to remove a runner
-that is running a job, so a runner that took a job in the meantime keeps its machine. For the finished, expired and
+A surplus machine's registration is removed before the machine is deleted. GitHub refuses to remove a runner that is
+running a job, so a runner that took a job in the meantime keeps its machine. For the finished, expired and
 unregistered rules the machine is deleted whatever GitHub answers; its job is over or its time is up.
 
 ### Act
@@ -321,13 +318,12 @@ custom data. Quota and allocation failures are reported as `ErrCapacity`. It sig
   creation is paused.
 - `/healthz`: healthy while every pool has completed a round recently (three intervals).
 
-## Out of scope
+## Limits
 
-- Keeping a VM between jobs, warm pools of stopped VMs, or any reuse.
-- A spending cap in money: the limits are machines per pool and lifetime per machine.
-- High availability: one replica. A second copy waits rather than doubles the work.
-- Running more than one installation against the same resource group under the same instance name.
-- Managing the network, identities, images or role assignments: those are made beforehand, for example with
-  Terraform; matchstick only uses them.
-- Deleting GitHub scale sets: they are created or updated on start and left in place.
-- Clouds other than Azure, for now. A provider is three methods.
+- Each machine serves one job; machines are never reused or kept stopped for later.
+- No spending cap in money: the limits are machines per pool and lifetime per machine.
+- One replica. A second copy waits rather than doubles the work.
+- Two installations must not share an instance name in the same GitHub organisation or resource group.
+- It does not make the network, identities, images or role assignments; they must exist beforehand.
+- Scale sets are created or updated on start and never deleted.
+- Azure only. Another cloud means another implementation of `Provider` (three methods).

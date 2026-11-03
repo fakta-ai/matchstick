@@ -7,7 +7,7 @@ lets the job run on it, and deletes the machine afterwards. No runner ever sees 
 no files, caches, credentials or processes from earlier jobs. It keeps no database; the cloud and GitHub are its whole
 state, so it can be restarted at any time.
 
-It is built on GitHub's runner scale-set protocol, with a cloud-neutral core. Azure is the first cloud.
+It creates the runners as Azure virtual machines and registers them with GitHub through runner scale sets.
 
 > [!WARNING]
 > Under construction: not usable yet. [docs/architecture.md](docs/architecture.md) describes what is being built.

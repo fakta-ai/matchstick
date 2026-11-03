@@ -37,7 +37,11 @@ through pull requests whose `check` passed.
   pinned; anything else (`matchstick-adapter`'s `rpc` and `mcp` modes) runs as a separate executable without secrets.
 - **Tests test behaviour**: what a pool does given what it observes, against the in-memory fakes, including restarts
   and failures halfway. Not which function called which.
-- **Docs say what is true now.** A change to behaviour updates `docs/` and `CHANGELOG.md` in the same pull request.
+- **Docs say what is true now**, for the reader: what it does, how to use it, its limits. That holds for the README,
+  `docs/` and code comments alike. No roadmap, plans or direction; no comparisons or positioning; no design history
+  or the reasons behind decisions. A limit is stated as a fact ("Azure only"). The README tells a user what
+  matchstick does, what it supports and how to use it. A change to behaviour updates `docs/` and `CHANGELOG.md` in
+  the same pull request.
 
 ## Go
 

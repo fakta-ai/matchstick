@@ -8,6 +8,8 @@ describes the code as it is, for people changing it.
 
 ```
 cmd/matchstick/            the program: run, and the operations decide, plan, status, drain; holds the secrets
+cmd/matchstick-adapter/    the operations over JSON-RPC (rpc) and MCP (mcp); holds no secrets
+internal/adapter/          runs the matchstick command line for each JSON-RPC or MCP call
 internal/op/               operations: names, JSON Schemas in and out, annotations, checks on every call
 internal/cli/              the command-line adapter: flags, --input, --json, help, errors, exit codes
 internal/config/           the configuration file: types, defaults, validation
@@ -199,6 +201,22 @@ The command line (`internal/cli`):
 - Exit 0 on success, 2 on invalid input or configuration, 1 otherwise; with `--json`, errors go to stderr as
   `{"error": {"code": "...", "message": "..."}}`.
 - Nothing prompts; `--no-input` is accepted.
+
+## rpc and mcp
+
+`matchstick-adapter rpc` (JSON-RPC 2.0, one message per line) and `matchstick-adapter mcp` (MCP over stdio, with the
+official Go SDK) are a separate executable that holds no secrets and links none of the GitHub or Azure code. It reads
+the tool definitions from `matchstick --help --json`, and for each call runs `matchstick <operation> --json --input -`
+with the parameters (without `_meta`) on standard input.
+
+- JSON-RPC: the method is the operation, the result its output. Errors carry matchstick's error object in
+  `data` (`code`, `message`); invalid input is -32602, other failures -32000, an unknown method -32601, a line that is
+  not JSON -32700, after which the loop goes on. Requests run concurrently; `notifications/cancelled` with a
+  `requestId` stops that call.
+- MCP: each operation is a tool with its schemas and annotations; the output is the tool's structured content, an
+  error the tool's error result with the error object as text.
+
+`--matchstick <path>` names the executable to run; by default `matchstick` on `PATH`. No operation reports progress.
 
 ## Configuration
 

@@ -25,3 +25,5 @@ versions follow [Semantic Versioning](https://semver.org/).
   Spot with regular fallback, quota and allocation failures reported as retry-later.
 - The GitHub credential is read from standard input or the secret mount.
 - `docs/configuration.md`, `docs/operations.md`, `examples/azure.yaml`.
+- `matchstick-adapter rpc` and `matchstick-adapter mcp`: the operations over JSON-RPC 2.0 and MCP on standard input and
+  output, running the `matchstick` command line for each call.

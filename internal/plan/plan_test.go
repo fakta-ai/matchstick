@@ -90,6 +90,15 @@ func TestDecide(t *testing.T) {
 				{Machine: "a", Reason: Unregistered}, {Machine: "b", Reason: Unregistered}}},
 		},
 		{
+			name: "unregistered: a machine whose runner never came online, with its registration",
+			obs: Observation{Now: now, Demand: new(1),
+				Machines: []Machine{machine("a", Running, 11*time.Minute), machine("b", Running, 9*time.Minute)},
+				Runners: []Runner{{ID: 1, Name: "a", CreatedAt: ago(11 * time.Minute)},
+					{ID: 2, Name: "b", CreatedAt: ago(9 * time.Minute)}}},
+			want: Decision{Wanted: 1, Serving: 1, Present: 2, Deletions: []Deletion{
+				{Machine: "a", Reason: Unregistered, RunnerID: 1}}},
+		},
+		{
 			name: "unregistered rule is skipped while the runner list is unknown",
 			obs: Observation{Now: now, Demand: new(1),
 				Machines: []Machine{machine("a", Running, time.Hour), machine("b", Stopped, time.Hour)}},

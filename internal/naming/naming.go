@@ -3,6 +3,9 @@
 // A name is <instance>-<pool>-<created><random>: the installation's name, the pool's name, the creation time in
 // seconds since the Unix epoch in base 36 (7 characters, zero-padded) and 4 random base-36 characters. The name alone
 // tells who owns a machine or registration, which pool it serves and when it was made.
+//
+// An instance name has no hyphen and the last part has none either, so a name splits one way only: the instance ends
+// at the first hyphen, the pool at the last.
 package naming
 
 import (
@@ -20,13 +23,23 @@ const (
 	alphabet     = "0123456789abcdefghijklmnopqrstuvwxyz"
 )
 
-// identifier is what an instance or pool name may be: lower-case letters, digits and inner hyphens, starting with a
-// letter. Names end up in VM names, host names and runner names, which all accept this set.
-var identifier = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
+// Instance and pool names use characters that VM names, host names and runner names all accept. Instance names have
+// no hyphen; pool names may have inner hyphens.
+var (
+	instanceName = regexp.MustCompile(`^[a-z][a-z0-9]*$`)
+	poolName     = regexp.MustCompile(`^[a-z]([a-z0-9-]*[a-z0-9])?$`)
+)
 
-// ValidIdentifier reports whether s may be used as an instance or pool name of at most maxLength characters.
-func ValidIdentifier(s string, maxLength int) bool {
-	return len(s) <= maxLength && identifier.MatchString(s)
+// ValidInstance reports whether s may name an installation: lower-case letters and digits, starting with a letter, at
+// most maxLength characters.
+func ValidInstance(s string, maxLength int) bool {
+	return len(s) <= maxLength && instanceName.MatchString(s)
+}
+
+// ValidPool reports whether s may name a pool: lower-case letters, digits and inner hyphens, starting with a letter,
+// at most maxLength characters.
+func ValidPool(s string, maxLength int) bool {
+	return len(s) <= maxLength && poolName.MatchString(s)
 }
 
 // Prefix returns the part every name of this instance's pool starts with.
@@ -47,10 +60,11 @@ func New(instance, pool string, t time.Time) string {
 	return Prefix(instance, pool) + created + string(random)
 }
 
-// Created returns the creation time recorded in a name of the pool. It fails for a name the pool does not own.
+// Created returns the creation time recorded in a name of the pool. It fails for a name the pool does not own, and
+// for an instance name that is not valid.
 func Created(instance, pool, name string) (time.Time, error) {
 	suffix, ok := strings.CutPrefix(name, Prefix(instance, pool))
-	if !ok || len(suffix) != timeLength+randomLength {
+	if !ok || !instanceName.MatchString(instance) || len(suffix) != timeLength+randomLength {
 		return time.Time{}, fmt.Errorf("%q is not a name of pool %q", name, pool)
 	}
 	for _, c := range suffix {

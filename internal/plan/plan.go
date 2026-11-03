@@ -74,7 +74,8 @@ const (
 	Finished Reason = "finished"
 	// Expired means the machine outlived the pool's maximum lifetime.
 	Expired Reason = "expired"
-	// Unregistered means the machine runs, but its runner did not register within the registration timeout.
+	// Unregistered means the machine's runner is not connected to GitHub (no registration, or an offline one) past
+	// the registration timeout.
 	Unregistered Reason = "unregistered"
 	// Orphan means the registration has no machine.
 	Orphan Reason = "orphan"
@@ -136,7 +137,7 @@ func Decide(o Observation, l Limits) Decision {
 			deletion.Reason = Finished
 		case !m.ExpiresAt.IsZero() && !o.Now.Before(m.ExpiresAt):
 			deletion.Reason = Expired
-		case o.Runners != nil && !registered && o.Now.Sub(m.CreatedAt) > timeout:
+		case o.Runners != nil && (!registered || !r.Online && !r.Busy) && o.Now.Sub(m.CreatedAt) > timeout:
 			deletion.Reason = Unregistered
 		default:
 			serving = append(serving, m)

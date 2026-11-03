@@ -7,7 +7,7 @@ describes the code as it is, for people changing it.
 ## Packages
 
 ```
-cmd/matchstick/            the command line: decide, plan, status
+cmd/matchstick/            the program: run, and the operations decide, plan, status, drain; holds the secrets
 internal/op/               operations: names, JSON Schemas in and out, annotations, checks on every call
 internal/cli/              the command-line adapter: flags, --input, --json, help, errors, exit codes
 internal/config/           the configuration file: types, defaults, validation
@@ -16,9 +16,13 @@ internal/plan/             the decisions: a pure function from what one pool's r
 internal/pool/             one pool's round: gather, plan, act; backoff; drain
 internal/provider/         the Provider interface: create, list and delete one pool's machines
 internal/provider/fake/    Provider in memory
-internal/github/           the Runners interface: register, list and remove one pool's runners
+internal/provider/azure/   Provider on Azure virtual machines
+internal/github/           the Runners interface, and its GitHub implementation: scale sets, JIT configurations,
+                           the runner list, removal, the listener
 internal/github/fake/      Runners in memory
+internal/secret/           the GitHub credential, from standard input or the secret mount
 internal/metrics/          Prometheus collectors
+internal/server/           HTTP: /metrics and /healthz; the admin endpoint (drain) on a loopback address
 ```
 
 `plan` imports only the standard library: no network, no clock, no randomness. `pool` depends on `plan` and the two
@@ -42,8 +46,67 @@ type Runners interface {
 }
 ```
 
-Implementations: the in-memory fakes, used by the tests and by a configuration with a `fake` section, which serves
-each pool's machines, registrations and demand from the file itself.
+Implementations: Azure (`provider/azure`) and GitHub (`github.ScaleSet`), and the in-memory fakes, used by the tests
+and by a configuration with a `fake` section, which serves each pool's machines, registrations and demand from the
+file itself.
+
+## GitHub
+
+- Each pool has one runner scale set, named `<instance>-<pool>`, in the configured runner group. `run` creates it or
+  updates its labels; `plan` and `status` only look it up.
+- `JITConfig` calls the scale-set client's `GenerateJitRunnerConfig`; `Remove` calls `RemoveRunner`, mapping "job still
+  running" to `ErrJobRunning` and "not found" to success.
+- `List` reads GitHub's REST runner list (`/orgs/{org}/actions/runners`, `/repos/{owner}/{repo}/actions/runners` or
+  `/enterprises/{enterprise}/actions/runners`, 100 per page), because the scale-set client has no list, and keeps the
+  names the pool owns. With a GitHub App it signs in with an installation token, renewed five minutes before it
+  expires.
+- The listener (`ScaleSet.Listen`) holds the scale set's message session through the client's `listener` package.
+  For each message it records `TotalAssignedJobs` as the pool's demand and acquires the jobs offered, unless the pool
+  drains (then it also tells GitHub its capacity is 0). It never calls the cloud. A failed session is reopened after a
+  backoff from 5 seconds to 2 minutes.
+- If GitHub refuses a second message session for the same scale set (another copy holds it), that copy keeps retrying.
+  Until it has a session it knows no demand, so it creates and scales down nothing; its rounds still apply the cleanup
+  rules, repeating the other copy's deletions, which are idempotent.
+
+## Azure
+
+Per machine: a network interface `<name>-nic` in the configured subnet with a private address only, then a VM
+`<name>` from the pool's Compute Gallery image, with the JIT configuration as user data (base64), the OS disk and
+network interface set to be deleted with the VM, boot diagnostics on, and a throwaway SSH key (Azure requires a login;
+its private half is discarded). Both carry the tags `matchstick-instance`, `matchstick-pool`, `matchstick-created-at`,
+`matchstick-expires-at` and `matchstick-priority`; the instance and pool tags decide ownership.
+
+- Pool options: VM size, image, a user-assigned identity or none, an ephemeral OS disk (`ResourceDisk`, `CacheDisk`
+  or `NvmeDisk`), OS disk size, Spot, accelerated networking, a custom-data file (such as cloud-init).
+- `Create` waits up to a minute for the VM's allocation. Quota and allocation failures (`QuotaExceeded`,
+  `SkuNotAvailable`, `AllocationFailed`, `ZonalAllocationFailed`, `Overconstrained*`, and `OperationNotAllowed` naming a
+  quota) are `ErrCapacity`. A Spot VM without capacity is reported as a plain failure and the pool uses regular
+  priority for 30 minutes. A VM Azure refused outright takes its network interface with it.
+- `List` reads the group's VMs and, for those provisioned, their power state: running is running; stopping, stopped,
+  deallocating and deallocated are stopped; provisioning failed is failed; deleting is deleting; anything else is
+  pending. A network interface without its VM is pending for two minutes, then failed.
+- `Delete` starts the VM's deletion, or the network interface's if no VM is left, and returns once Azure accepts it.
+- Sign-in: workload identity, then a managed identity, then the Azure CLI. No client secret.
+
+## Secrets
+
+The GitHub credential (an App's private key or a token) comes from standard input (`run --secrets -`, a JSON object
+`{"githubAppPrivateKey": "..."}` or `{"githubToken": "..."}`), otherwise from the secret mount: the files
+`github-app-private-key` or `github-token` in `/var/run/secrets/matchstick` (`--secrets-dir` for `run`, `secretsDir`
+for the operations). Never from flags, environment variables or the configuration file; the secret type prints as
+redacted.
+
+## run
+
+`matchstick run --config <file>` builds every pool, then runs each pool's loop and listener, and serves:
+
+- on `listen.metrics` (default `:9090`): `/metrics`, and `/healthz`, which fails once a pool has had no successful
+  round for three intervals (counted from the start before the first round);
+- on `listen.admin` (default `127.0.0.1:9091`): `GET /pools`, and `POST /pools/{pool}/drain` with
+  `{"draining": true|false}`.
+
+Logs are JSON lines on stdout. SIGINT or SIGTERM stops it; machines and registrations stay as they are for the next
+start.
 
 ## Names
 
@@ -120,6 +183,10 @@ schema, runs the operation and checks the output against its schema.
 | `decide` | the planner: an observation and limits in, a decision out | yes | no | yes | no |
 | `plan` | gathers each configured pool and returns what a round would do; changes nothing | yes | no | yes | yes |
 | `status` | each pool's machines, registrations and demand | yes | no | yes | yes |
+| `drain` | asks the running process, at `listen.admin`, to drain a pool or stop draining it | no | yes | yes | yes |
+
+`plan` and `status` read demand from the scale set's statistics, as GitHub reports them; `null` when it reports none.
+A drain lasts until the process restarts; to keep a pool empty, set its `maximum` to 0.
 
 The command line (`internal/cli`):
 
@@ -136,7 +203,8 @@ The command line (`internal/cli`):
 
 YAML (or JSON), unknown fields rejected. `instance` (letters and digits, at most 10), `interval` (default 30s),
 `listen`, and `pools`, each with `name` (at most 20), `labels`, `maximum`, `spares`, `maxLifetime` (default 6h) and
-`registrationTimeout` (default 10m). `examples/fake.yaml` is a complete example with a `fake` section.
+`registrationTimeout` (default 10m); then either `github` and `azure` sections with each pool's `azure` shape, or a
+`fake` section. [configuration.md](configuration.md) lists every field.
 
 ## Metrics
 
@@ -145,5 +213,10 @@ removals by reason, rounds by result, round duration, time of the last successfu
 
 ## Limits
 
+- Azure only.
+- One replica.
 - Each machine serves one job.
+- Two installations must not share an instance name in the same GitHub organisation or resource group.
+- The network, identities, images and role assignments must exist beforehand.
+- Scale sets are created or updated, never deleted.
 - The only bounds are the maximum machines per pool and the maximum lifetime per machine.

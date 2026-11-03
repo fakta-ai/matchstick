@@ -20,6 +20,7 @@ func main() {
 		Summary:    "ephemeral GitHub Actions runners, one fresh cloud VM per job",
 		Version:    version,
 		Operations: operations(),
+		Commands:   []cli.Command{runCommand(os.Stderr)},
 		Stdin:      os.Stdin,
 		Stdout:     os.Stdout,
 		Stderr:     os.Stderr,

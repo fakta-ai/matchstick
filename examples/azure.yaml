@@ -1,0 +1,33 @@
+# matchstick on Azure. The GitHub credential is not here: it is read from the secret mount
+# (/var/run/secrets/matchstick/github-app-private-key) or from standard input.
+instance: ci
+github:
+  url: https://github.com/your-org
+  runnerGroup: default
+  app:
+    clientID: Iv23liExample
+    installationID: 12345678
+azure:
+  subscriptionID: 00000000-0000-0000-0000-000000000000
+  resourceGroup: github-runners
+  location: westeurope
+  subnetID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network/providers/Microsoft.Network/virtualNetworks/runners/subnets/runners
+pools:
+  - name: build
+    labels: [linux-x64-large]
+    maximum: 3
+    maxLifetime: 3h
+    azure:
+      size: Standard_D16ads_v5
+      image: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/images/providers/Microsoft.Compute/galleries/runners/images/runner/versions/1.0.0
+      identity: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/build-runner
+      ephemeralOSDisk: ResourceDisk
+  - name: untrusted
+    labels: [linux-x64]
+    maximum: 4
+    spares: 1
+    azure:
+      size: Standard_D2ads_v5
+      image: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/images/providers/Microsoft.Compute/galleries/runners/images/runner/versions/1.0.0
+      ephemeralOSDisk: ResourceDisk
+      spot: true

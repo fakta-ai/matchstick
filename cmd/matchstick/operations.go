@@ -27,6 +27,21 @@ type DecideInput struct {
 type PoolsInput struct {
 	Config string `json:"config,omitempty" jsonschema:"the configuration file (default matchstick.yaml)"`
 	Pool   string `json:"pool,omitempty" jsonschema:"only this pool"`
+	// SecretsDir is where the GitHub credential is mounted.
+	SecretsDir string `json:"secretsDir,omitempty" jsonschema:"the secret mount holding the GitHub credential (default /var/run/secrets/matchstick)"`
+}
+
+// DrainInput asks the running process to drain a pool, or to stop.
+type DrainInput struct {
+	Config string `json:"config,omitempty" jsonschema:"the configuration file (default matchstick.yaml); its listen.admin address is used"`
+	Pool   string `json:"pool" jsonschema:"the pool to drain"`
+	Stop   bool   `json:"stop,omitempty" jsonschema:"stop draining instead"`
+}
+
+// DrainOutput is the pool's state after the request.
+type DrainOutput struct {
+	Pool     string `json:"pool"`
+	Draining bool   `json:"draining"`
 }
 
 // PlanOutput is the plan operation's output.
@@ -74,6 +89,11 @@ func operations() []*op.Operation {
 			"matchstick status --config matchstick.yaml --pool build",
 			op.Annotations{ReadOnly: true, Idempotent: true, OpenWorld: true},
 			statusPools),
+		op.Define("drain",
+			"Ask the running matchstick to drain a pool: acquire no jobs, create nothing, remove idle runners, let busy ones finish. Lasts until the process restarts.",
+			"matchstick drain --pool build",
+			op.Annotations{Destructive: true, Idempotent: true, OpenWorld: true},
+			drainPool),
 	}
 }
 
@@ -87,11 +107,11 @@ func observe(ctx context.Context, in PoolsInput, each func(config.Pool, plan.Obs
 	if err != nil {
 		return err
 	}
-	b, err := newBackends(cfg, pools)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	b, err := newBackends(ctx, cfg, pools, secretSource{dir: in.SecretsDir}, false, log)
 	if err != nil {
 		return err
 	}
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	m := metrics.New(prometheus.NewRegistry())
 	for _, pc := range pools {
 		be := b[pc.Name]

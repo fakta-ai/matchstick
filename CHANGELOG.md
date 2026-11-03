@@ -18,3 +18,10 @@ versions follow [Semantic Versioning](https://semver.org/).
   `--help --json` listing them as MCP tools.
 - A fake cloud and GitHub, configured in the configuration file: `matchstick plan --config examples/fake.yaml`.
 - Prometheus metrics for each pool.
+- `matchstick run`: serves every configured pool with GitHub runner scale sets and Azure virtual machines; metrics and
+  health on `listen.metrics`, drain on `listen.admin`.
+- `matchstick drain`: drains a pool of the running process, or stops draining it.
+- The Azure provider: private network interface, Compute Gallery image, identity per pool or none, ephemeral OS disk,
+  Spot with regular fallback, quota and allocation failures reported as retry-later.
+- The GitHub credential is read from standard input or the secret mount.
+- `docs/configuration.md`, `docs/operations.md`, `examples/azure.yaml`.

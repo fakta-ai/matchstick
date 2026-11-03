@@ -268,6 +268,24 @@ func TestUnregisteredMachineIsDeletedAfterTheTimeout(t *testing.T) {
 	}
 }
 
+func TestMachineWhoseRunnerNeverConnectsIsDeletedWithItsRegistration(t *testing.T) {
+	w := newWorld(t)
+	w.pool.SetDemand(1)
+	w.round()
+	name := w.names()[0]
+	w.machines.SetState(name, plan.Running) // boots, but the runner never comes online
+	w.clock.advance(11 * time.Minute)
+	w.round()
+	for _, r := range w.runnerList() {
+		if r.Name == name {
+			t.Errorf("registration of %s kept", name)
+		}
+	}
+	if names := w.names(); len(names) != 1 || names[0] == name {
+		t.Fatalf("machines = %v: want %s replaced", names, name)
+	}
+}
+
 func TestMachinesThatNeverRegisterPauseCreation(t *testing.T) {
 	w := newWorld(t)
 	w.pool.SetDemand(3)

@@ -50,7 +50,7 @@ func New(reg prometheus.Registerer) *Metrics {
 		Rounds:        counter("rounds_total", "Rounds by result (success, failure).", "result"),
 		RoundDuration: duration,
 		LastSuccess: gauge("last_success_timestamp_seconds",
-			"When the pool's last round that could see its machines ended, in seconds since the Unix epoch."),
+			"When the pool's last round that could see its machines gathered them, in seconds since the Unix epoch."),
 		CreationPaused: gauge("creation_paused", "1 while the pool backs off creating machines."),
 		Draining:       gauge("draining", "1 while the pool drains."),
 	}

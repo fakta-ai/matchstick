@@ -11,7 +11,7 @@ import (
 	"github.com/fakta-ai/matchstick/internal/plan"
 )
 
-func run(t *testing.T, args ...string) (int, string, string) {
+func call(t *testing.T, args ...string) (int, string, string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	app := &cli.App{Name: "matchstick", Version: "test", Operations: operations(),
@@ -20,7 +20,7 @@ func run(t *testing.T, args ...string) (int, string, string) {
 }
 
 func TestPlanAgainstTheFakeExample(t *testing.T) {
-	code, stdout, stderr := run(t, "plan", "--config", "../../examples/fake.yaml", "--json")
+	code, stdout, stderr := call(t, "plan", "--config", "../../examples/fake.yaml", "--json")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
@@ -40,7 +40,7 @@ func TestPlanAgainstTheFakeExample(t *testing.T) {
 }
 
 func TestStatusSelectsAPool(t *testing.T) {
-	code, stdout, stderr := run(t, "status", "--config", "../../examples/fake.yaml", "--pool", "build", "--json")
+	code, stdout, stderr := call(t, "status", "--config", "../../examples/fake.yaml", "--pool", "build", "--json")
 	if code != 0 {
 		t.Fatalf("exit %d: %s", code, stderr)
 	}
@@ -48,7 +48,7 @@ func TestStatusSelectsAPool(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &out); err != nil || len(out.Pools) != 1 || len(out.Pools[0].Machines) != 3 {
 		t.Errorf("status %s (%v)", stdout, err)
 	}
-	if code, _, _ := run(t, "status", "--config", "../../examples/fake.yaml", "--pool", "nope", "--json"); code != 2 {
+	if code, _, _ := call(t, "status", "--config", "../../examples/fake.yaml", "--pool", "nope", "--json"); code != 2 {
 		t.Errorf("unknown pool: exit %d, want 2", code)
 	}
 }

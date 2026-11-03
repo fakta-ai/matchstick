@@ -6,17 +6,20 @@ rules for people; this file is the short form. How it is built: [docs/architectu
 ## Build and check
 
 ```sh
-nix develop                    # Go, golangci-lint, govulncheck, Helm
+nix develop                    # Go, golangci-lint, govulncheck, Helm, jq, yq
 go vet ./...
 go test -race ./...
 golangci-lint run ./...        # configuration in .golangci.yml
 govulncheck ./...
 helm lint deploy/chart/matchstick
 nix build .#matchstick         # both executables; runs the tests; checks vendorHash
+bash .github/tests/codex.sh    # the review gate: Dependabot's flake.lock-only pull requests pass without a review
 ```
 
 CI runs exactly these on every pull request (`.github/workflows/ci.yml`, job `check`); `main` accepts changes only
-through pull requests whose `check` passed. A change to `go.sum` updates `vendorHash` in `nix/package.nix`.
+through pull requests whose `check` passed. A change to `go.sum` updates `vendorHash` in `nix/package.nix`. Dependabot
+opens a weekly pull request for `flake.lock` (`.github/dependabot.yml`); one that changes nothing else merges by itself
+once `check` passes.
 
 ## Design rules
 

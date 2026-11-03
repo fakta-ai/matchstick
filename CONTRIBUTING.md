@@ -54,5 +54,7 @@ fails without it.
 - Update `docs/` and the `Unreleased` section of `CHANGELOG.md` when behaviour changes.
 - Keep each pull request to one concern. Pull requests are merged with a merge commit once CI passes and review
   threads are resolved.
+- Dependabot opens a weekly pull request moving `flake.lock`'s inputs, each to a commit at least 14 days old. One that
+  changes only `flake.lock` needs no review and merges by itself once CI passes.
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE).

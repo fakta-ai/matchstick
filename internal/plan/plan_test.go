@@ -139,6 +139,14 @@ func TestDecide(t *testing.T) {
 				Deletions: []Deletion{{Machine: "idle", Reason: Surplus, RunnerID: 1, Guarded: true}}},
 		},
 		{
+			name: "drain needs no demand",
+			obs: Observation{Now: now, Draining: true,
+				Machines: []Machine{machine("idle", Running, time.Minute)},
+				Runners:  []Runner{runner(1, "idle", time.Minute, false)}},
+			want: Decision{Present: 1,
+				Deletions: []Deletion{{Machine: "idle", Reason: Surplus, RunnerID: 1, Guarded: true}}},
+		},
+		{
 			name: "a deleting machine is left alone",
 			obs: Observation{Now: now, Demand: new(0), Runners: []Runner{},
 				Machines: []Machine{machine("a", Deleting, 5*time.Hour)}},

@@ -1,0 +1,21 @@
+# A made-up pool to try the planner without GitHub or a cloud:
+#   matchstick plan --config examples/fake.yaml
+# Times are fixed, so machines here look as old as they are relative to now.
+instance: demo
+pools:
+  - name: build
+    maximum: 4
+    spares: 1
+    maxLifetime: 3h
+    registrationTimeout: 10m
+fake:
+  pools:
+    build:
+      demand: 2
+      machines:
+        - {name: demo-build-0000001aaaa, state: running, createdAt: "2026-01-01T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z"}
+        - {name: demo-build-0000002bbbb, state: stopped, createdAt: "2026-01-01T00:00:00Z", expiresAt: "2099-01-01T00:00:00Z"}
+        - {name: demo-build-0000003cccc, state: running, createdAt: "2026-01-01T00:00:00Z", expiresAt: "2026-01-01T03:00:00Z"}
+      runners:
+        - {id: 1, name: demo-build-0000001aaaa, createdAt: "2026-01-01T00:00:00Z", online: true, busy: true}
+        - {id: 2, name: demo-build-0000004dddd, createdAt: "2026-01-01T00:00:00Z", online: false, busy: false}

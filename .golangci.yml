@@ -8,6 +8,13 @@ linters:
     - unconvert
     - unparam
     - usestdlibvars
+  settings:
+    errcheck:
+      # Writing to the terminal: nothing useful can be done when it fails.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
 formatters:
   enable:
     - gofmt

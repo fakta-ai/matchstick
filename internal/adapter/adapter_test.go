@@ -117,7 +117,10 @@ func TestRPCCancellation(t *testing.T) {
 	_, _ = w.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":7}}` + "\n"))
 	_ = w.Close()
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Error(err)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancelled request did not stop")
 	}
@@ -200,7 +203,6 @@ func (s *syncBuffer) String() string {
 	defer s.mu.Unlock()
 	return s.b.String()
 }
-
 
 func ioPipe() (*os.File, *os.File) {
 	r, w, err := os.Pipe()

@@ -40,7 +40,7 @@ func MCPServer(version string, tools []op.Tool, run Exec) *mcp.Server {
 			}
 			return &mcp.CallToolResult{
 				Content:           []mcp.Content{&mcp.TextContent{Text: string(out)}},
-				StructuredContent: json.RawMessage(out),
+				StructuredContent: out,
 			}, nil
 		})
 	}

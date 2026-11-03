@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,6 +127,31 @@ func TestRPCCancellation(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"id":7`) {
 		t.Errorf("no response for the cancelled request: %s", out.String())
+	}
+}
+
+func TestRPCStopsOnCancelWithInputOpen(t *testing.T) {
+	f := &fakeMatchstick{}
+	tools, _ := Tools(context.Background(), f.exec)
+	r, w := ioPipe()
+	defer func() { _ = w.Close() }()
+	ctx, cancel := context.WithCancel(context.Background())
+	var out syncBuffer
+	done := make(chan error)
+	go func() { done <- ServeRPC(ctx, r, &out, tools, f.exec) }()
+	_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"slow","params":{}}` + "\n"))
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("ServeRPC returned %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ServeRPC did not return after cancellation")
+	}
+	if !strings.Contains(out.String(), `"id":1`) {
+		t.Errorf("the call in flight got no answer: %s", out.String())
 	}
 }
 

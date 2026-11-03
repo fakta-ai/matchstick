@@ -39,8 +39,10 @@ type rpcResponse struct {
 	Error   *rpcError       `json:"error,omitempty"`
 }
 
-// ServeRPC answers JSON-RPC 2.0 requests, one per line, until r ends: the method is an operation's name, the params its
-// input (without _meta), the result its output. Requests run concurrently; notifications/cancelled stops one.
+// ServeRPC answers JSON-RPC 2.0 requests, one per line, until r ends or ctx is cancelled: the method is an operation's
+// name, the params its input (without _meta), the result its output. Requests run concurrently;
+// notifications/cancelled stops one. On cancellation it stops reading, cancels the calls in flight and returns once
+// they have answered.
 func ServeRPC(ctx context.Context, r io.Reader, w io.Writer, tools []op.Tool, run Exec) error {
 	known := map[string]bool{}
 	for _, t := range tools {
@@ -61,10 +63,34 @@ func ServeRPC(ctx context.Context, r io.Reader, w io.Writer, tools []op.Tool, ru
 		defer mu.Unlock()
 		_, _ = w.Write(append(b, '\n'))
 	}
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	lines := make(chan []byte)
+	readErr := make(chan error, 1)
+	go func() {
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
+		for scanner.Scan() {
+			select {
+			case lines <- append([]byte(nil), scanner.Bytes()...):
+			case <-ctx.Done():
+				return
+			}
+		}
+		readErr <- scanner.Err()
+		close(lines)
+	}()
+	for {
+		var line []byte
+		select {
+		case <-ctx.Done():
+			wg.Wait()
+			return ctx.Err()
+		case l, ok := <-lines:
+			if !ok {
+				wg.Wait()
+				return <-readErr
+			}
+			line = l
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -132,6 +158,4 @@ func ServeRPC(ctx context.Context, r io.Reader, w io.Writer, tools []op.Tool, ru
 			respond(rpcResponse{ID: req.ID, Result: out})
 		})
 	}
-	wg.Wait()
-	return scanner.Err()
 }

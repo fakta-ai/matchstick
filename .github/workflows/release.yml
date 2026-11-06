@@ -435,8 +435,10 @@ jobs:
             cosign verify-blob assets/checksums.txt --bundle assets/checksums.txt.sigstore.json \
             --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER"
           check "every file checksums.txt lists matches it" bash -c 'cd assets && sha256sum --check --strict checksums.txt'
+          # pulled first, so the pull's progress isn't in what --version prints
+          docker pull --quiet "$IMAGE@$IMAGE_DIGEST" >/dev/null || true
           check "the image runs and reports $VERSION" \
-            equal "$(docker run --rm "$IMAGE@$IMAGE_DIGEST" --version 2>&1)" "matchstick $VERSION"
+            equal "$(docker run --rm --pull never "$IMAGE@$IMAGE_DIGEST" --version 2>&1)" "matchstick $VERSION"
           if [ "$PUBLIC" = true ]; then
             check "the image's build provenance" gh attestation verify "oci://$IMAGE@$IMAGE_DIGEST" --repo "$REPO"
             check "the chart's build provenance" gh attestation verify "oci://$CHART@$CHART_DIGEST" --repo "$REPO"

@@ -31,7 +31,8 @@ internal/githubapp/        the GitHub App: its manifest and GitHub's answer to i
 internal/metrics/          Prometheus collectors
 internal/server/           HTTP: /metrics and /healthz; the admin endpoint (drain) on a loopback address
 deploy/chart/matchstick/   Helm chart: one replica, Recreate, Azure workload identity
-nix/                       the Nix package and the container image
+nix/                       the Nix package
+.goreleaser.yaml           the release: archives, checksums, SBOMs, signatures, the container image (ko)
 examples/                  configurations and a cloud-init runner image example
 ```
 

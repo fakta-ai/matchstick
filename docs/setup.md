@@ -25,8 +25,8 @@ flowchart LR
 | owner of the GitHub organisation (or admin of the repository) | creating and installing the GitHub App |
 | an Azure subscription where you can create resource groups, roles, role assignments and managed identities | the runners' resources and matchstick's identity |
 | a Kubernetes cluster on Azure with workload identity (AKS: `--enable-oidc-issuer --enable-workload-identity`), in or peered with the runners' virtual network | running matchstick |
-| `kubectl`, `helm` 3.8 or later, `az`, `cosign`, `yq` | the commands below |
-| the `matchstick` binary for your computer, from the [latest release](https://github.com/fakta-ai/matchstick/releases) (`matchstick_<version>_<os>_<arch>.tar.gz`, checked against `checksums.txt`) | creating and checking the GitHub App |
+| `kubectl`, `helm` 3.8 or later, `az`, `cosign`, `yq`, and `gh` for build provenance attestations | the commands below |
+| the `matchstick` binary for your computer, from the [latest release](https://github.com/fakta-ai/matchstick/releases) (`matchstick_<version>_<os>_<arch>.tar.gz`, checked against the signed `checksums.txt` as [operations.md](operations.md#installing) shows) | creating and checking the GitHub App |
 
 Runners can serve an organisation or a single repository, on github.com, GitHub Enterprise Cloud (including
 `*.ghe.com`) or GitHub Enterprise Server. Runners of a whole enterprise cannot be registered by a GitHub App; they need
@@ -334,6 +334,9 @@ cosign verify ghcr.io/fakta-ai/charts/matchstick@sha256:<chart digest> \
 cosign verify ghcr.io/fakta-ai/matchstick@sha256:<image digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v$version
+# with the GitHub CLI, where the release has build provenance attestations (operations.md#installing)
+gh attestation verify oci://ghcr.io/fakta-ai/charts/matchstick@sha256:<chart digest> --repo fakta-ai/matchstick
+gh attestation verify oci://ghcr.io/fakta-ai/matchstick@sha256:<image digest> --repo fakta-ai/matchstick
 
 helm install matchstick matchstick-$version.tgz --namespace matchstick -f values.yaml \
   --set image.digest=sha256:<image digest> \

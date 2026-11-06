@@ -25,9 +25,6 @@
           default = matchstick;
           inherit matchstick;
         }
-        // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-          image = pkgs.callPackage ./nix/image.nix { inherit matchstick version; };
-        }
       );
 
       devShells = forAll (pkgs: {
@@ -37,7 +34,7 @@
             pkgs.golangci-lint
             pkgs.govulncheck
             pkgs.kubernetes-helm
-            # signs releases (.github/workflows/release.yml)
+            # verifies a release's signatures (docs/operations.md)
             pkgs.cosign
             # the review gate's test (.github/tests/codex.sh)
             pkgs.jq

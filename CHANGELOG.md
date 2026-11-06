@@ -5,6 +5,26 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Releases publish an SPDX SBOM for each archive and for the image, and sign `checksums.txt` with Sigstore, keyless
+  (`checksums.txt.sigstore.json`).
+- Releases from the public repository carry GitHub's build provenance attestations for the archives,
+  `checksums.txt`, the image and the chart (`gh attestation verify`, `docs/operations.md`).
+
+### Changed
+
+- The container image is built with ko, for linux/amd64 and linux/arm64, on distroless static (CA certificates, time
+  zones, no shell, user 65532) pinned by digest. It holds `matchstick` only, at `/ko-app/matchstick` and on `PATH`,
+  with no default arguments; `matchstick-adapter` is in the release archives only. The chart runs it unchanged.
+- A version tag publishes only a commit on `main` whose CI run there passed; the release waits for that run while it
+  is in progress. The GitHub release stays a draft until the image and the chart are published.
+- CI runs its checks as parallel jobs; pull requests build the Nix package only when its inputs change.
+
+### Removed
+
+- The flake's `image` output; the Nix package and the dev shell remain.
+
 ## [0.2.0] - 2026-11-06
 
 ### Added

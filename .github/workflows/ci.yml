@@ -230,10 +230,11 @@ jobs:
           exit "$failed"
 
   # the version CHANGELOG.md names, released if it isn't yet; the permissions are the most any of its jobs takes, and
-  # each job takes only its own
+  # each job takes only its own. `check` runs after skipped jobs (`changes` on main), and a bare `if` would skip this
+  # job with them, so it asks for `check`'s own result.
   release:
     needs: check
-    if: github.event_name == 'push'
+    if: ${{ !cancelled() && needs.check.result == 'success' && github.event_name == 'push' }}
     permissions:
       contents: write
       packages: write

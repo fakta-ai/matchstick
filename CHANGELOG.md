@@ -36,6 +36,7 @@ versions follow [Semantic Versioning](https://semver.org/).
   which VM it is with Azure's attested document; matchstick releases each configuration once, only to its own VM,
   and holds it in memory only. Its TLS key is made at start and never stored; machines trust only its certificate.
 - `matchstick_claims_total{pool,result}`.
+- The chart's `image.digest` pins the image by digest.
 
 ### Security
 

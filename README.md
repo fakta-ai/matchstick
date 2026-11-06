@@ -9,43 +9,43 @@ state, so it can be restarted at any time.
 
 It creates the runners as Azure virtual machines and registers them with GitHub through runner scale sets.
 
-> [!WARNING]
-> Under construction: not usable yet. No release has been published.
+> [!NOTE]
+> Early releases (0.x): a minor version may change the configuration. [CHANGELOG.md](CHANGELOG.md) says what each
+> release changed; releases are on the [releases page](https://github.com/fakta-ai/matchstick/releases).
 
 ## What it supports
 
 - Several pools in one process, each with its own labels, VM size, image, identity (or none), maximum number of
   machines, idle spares and maximum lifetime.
-- Azure VMs from a Compute Gallery image, with a private address only, an optional ephemeral OS disk on the VM's
-  local storage, and Spot priority that falls back to regular priority when Spot has no capacity.
+- Azure Linux VMs from a Compute Gallery image, with a private address only, an optional ephemeral OS disk on the
+  VM's local storage, and Spot priority that falls back to regular priority when Spot has no capacity.
 - No secret in the VMs' settings: each VM claims its runner registration from matchstick, proving which VM it is with
   Azure's signed attested document, and gets it once.
-- GitHub organisations, repositories and enterprises, on github.com or GitHub Enterprise Server, with a GitHub App or
-  a token.
-- Prometheus metrics, a health check, and a command line with JSON in and out (`plan`, `status`, `drain`), also served
-  over JSON-RPC and MCP by `matchstick-adapter`.
+- GitHub organisations and repositories with a GitHub App or a token, and enterprises with a token, on github.com,
+  GitHub Enterprise Cloud or GitHub Enterprise Server.
+- Creating the GitHub App with exactly the permissions it needs (`matchstick github-app create`), and checking it
+  (`matchstick github-app check`).
+- Prometheus metrics, a health check, and a command line with JSON in and out (`plan`, `status`, `drain`,
+  `github-app create`, `github-app check`), also served over JSON-RPC and MCP by `matchstick-adapter`.
 
-## Quick start
+## Getting started
 
-1. Make, beforehand: a subnet for the runners, a resource group for the VMs, an image that meets the
-   [image contract](docs/image-contract.md) in a Compute Gallery, a GitHub App installed on your organisation with
-   **Self-hosted runners: read and write**, and an Azure identity for matchstick with the roles in
-   [docs/configuration.md](docs/configuration.md#azure).
-2. Write a configuration, starting from [examples/azure.yaml](examples/azure.yaml). `claimURL` is where the VMs reach
-   matchstick's claim endpoint (`listen.claim`, port 8443 by default), so the runners' subnet must reach it.
-3. Put the App's private key in the secret mount, `/var/run/secrets/matchstick/github-app-private-key`.
-4. See what it would do, then run it:
+[docs/setup.md](docs/setup.md) takes you from nothing to a first job: create and install the GitHub App, store its
+key, prepare Azure (resource group, subnet, runner image, role, workload identity), install the signed Helm chart,
+check the setup, run a workflow. In short:
 
-   ```sh
-   matchstick plan --config matchstick.yaml
-   matchstick run --config matchstick.yaml
-   ```
+```sh
+matchstick github-app create --org acme --name acme-runners --key-file secrets/github-app-private-key
+# install the App with the installURL it prints; store the key in a Kubernetes Secret; prepare Azure
+matchstick github-app check --config matchstick.yaml --secrets-dir secrets
+helm install matchstick oci://ghcr.io/fakta-ai/charts/matchstick --version <version> \
+  --namespace matchstick -f values.yaml
+```
 
-5. In a workflow, ask for a pool's label: `runs-on: linux-x64-large`.
+Then, in a workflow, ask for a pool's label: `runs-on: acme-linux`.
 
-On Kubernetes, the chart runs one replica signed in to Azure with workload identity:
-`helm install matchstick oci://ghcr.io/fakta-ai/charts/matchstick --version <version>`. Releases sign the image and the
-chart; [docs/operations.md](docs/operations.md#installing) says how to check them.
+Outside Kubernetes, `matchstick run --config matchstick.yaml` runs it with the key in
+`/var/run/secrets/matchstick/github-app-private-key`; `matchstick plan` first shows what it would do.
 
 Try the planner without a cloud or GitHub:
 
@@ -62,6 +62,7 @@ go build ./cmd/...        # with Go 1.27.3 or later
 
 ## Documentation
 
+- [Setting up](docs/setup.md): from nothing to a first job
 - [Configuration](docs/configuration.md)
 - [Operations](docs/operations.md): running, watching, draining
 - [The image contract](docs/image-contract.md)

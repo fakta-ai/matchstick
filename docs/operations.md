@@ -11,6 +11,16 @@ time: the next start finds every machine and registration again. Machines still 
 their runner configuration, which only the old process held: they power off, and the new process deletes them and
 creates replacements as jobs need them.
 
+On Kubernetes, the chart in `deploy/chart/matchstick` runs it that way. Its image is
+`<image.repository>:<image.tag>`, the tag defaulting to the chart's `appVersion`. To run exactly the image you
+checked, pin it by digest: set `image.digest` to the image's manifest digest, `sha256:` followed by 64 hexadecimal
+digits. The pod then runs `<image.repository>@<image.digest>`, and `image.tag` is ignored.
+
+```sh
+helm upgrade --install matchstick deploy/chart/matchstick -f values.yaml \
+  --set image.digest=sha256:<digest>
+```
+
 ## Watching
 
 - `/healthz` on `listen.metrics`: 200 while every pool has gathered its machines within three intervals plus five

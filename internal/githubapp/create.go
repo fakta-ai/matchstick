@@ -26,8 +26,6 @@ type CreateOptions struct {
 	Name   string
 	// KeyFile receives the App's private key, created with mode 0600; it must not exist yet.
 	KeyFile string
-	// PrintKey also puts the private key in the output.
-	PrintKey bool
 	// Browser opens the page in the default browser; the address is printed either way.
 	Browser bool
 	// Timeout bounds the wait for GitHub's answer.
@@ -46,7 +44,6 @@ type Created struct {
 	HTMLURL    string `json:"htmlURL" jsonschema:"the App's page"`
 	InstallURL string `json:"installURL" jsonschema:"where to install the App on the organisation or repository"`
 	KeyFile    string `json:"keyFile" jsonschema:"the file holding the App's private key (PEM, mode 0600)"`
-	PrivateKey string `json:"privateKey,omitempty" jsonschema:"the App's private key (PEM), only when printKey is set"`
 }
 
 // pageTemplate is the local page: a form that posts the manifest to GitHub, sent at once.
@@ -170,9 +167,6 @@ func Create(ctx context.Context, o CreateOptions) (Created, error) {
 			"written to %s: %v; generate a new private key on %s", app.Slug, app.ID, o.KeyFile, err, app.HTMLURL)
 	}
 	written = true
-	if o.PrintKey {
-		out.PrivateKey = app.PEM
-	}
 	return out, nil
 }
 

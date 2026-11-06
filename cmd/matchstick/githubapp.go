@@ -18,7 +18,6 @@ type AppCreateInput struct {
 	Name      string        `json:"name" jsonschema:"the App's name, unique on the GitHub host, at most 34 characters"`
 	Host      string        `json:"host,omitempty" jsonschema:"the GitHub host: https://github.com (the default), https://<name>.ghe.com, or a GitHub Enterprise Server's URL"`
 	KeyFile   string        `json:"keyFile" jsonschema:"a new file for the App's private key, written with mode 0600"`
-	PrintKey  bool          `json:"printKey,omitempty" jsonschema:"also put the private key in the output"`
 	NoBrowser bool          `json:"noBrowser,omitempty" jsonschema:"do not open a browser; only print the page's address on stderr"`
 	Timeout   plan.Duration `json:"timeout,omitempty" jsonschema:"how long to wait for GitHub's answer, at most 1h (default 15m)"`
 }
@@ -40,8 +39,8 @@ func githubAppOperations() []*op.Operation {
 			"Create the GitHub App matchstick signs in as, through GitHub's App manifest flow. matchstick serves a "+
 				"page on a loopback address, opens it in the browser and prints its address on stderr; the page "+
 				"sends the App's manifest to GitHub, where you create the App, and GitHub sends the browser back "+
-				"with a code that matchstick exchanges for the App. The App's private key goes to keyFile, mode "+
-				"0600, and to the output only with printKey. The App is private, has no webhook, and has only the "+
+				"with a code that matchstick exchanges for the App. The App's private key goes only to keyFile, "+
+				"mode 0600; the output gives that path. The App is private, has no webhook, and has only the "+
 				"permissions matchstick needs: on an organisation, Self-hosted runners: write; on a repository, "+
 				"Administration: write; Metadata: read on both. GitHub Apps cannot register enterprise runners: an "+
 				"enterprise needs a token. Install the App at installURL afterwards.",
@@ -74,7 +73,7 @@ func createApp(ctx context.Context, in AppCreateInput) (githubapp.Created, error
 		timeout = defaultCreateTimeout
 	}
 	return githubapp.Create(ctx, githubapp.CreateOptions{Target: t, Name: in.Name, KeyFile: in.KeyFile,
-		PrintKey: in.PrintKey, Browser: !in.NoBrowser, Timeout: timeout, Prompt: os.Stderr})
+		Browser: !in.NoBrowser, Timeout: timeout, Prompt: os.Stderr})
 }
 
 func checkApp(ctx context.Context, in AppCheckInput) (githubapp.Report, error) {

@@ -339,11 +339,13 @@ the tool definitions from `matchstick --help --json`, and for each call runs `ma
 with the parameters (without `_meta`) on standard input.
 
 - JSON-RPC: the method is the operation, the result its output. Errors carry matchstick's error object in
-  `data` (`code`, `message`); invalid input is -32602, other failures -32000, an unknown method -32601, a line that is
-  not JSON -32700, after which the loop goes on. Requests run concurrently; `notifications/cancelled` with a
-  `requestId` stops that call.
+  `data` (`code`, `message`), and in `data.result` the output a failed call printed (a failed `github-app check`'s
+  report); invalid input is -32602, other failures -32000, an unknown method -32601, a line that is not JSON -32700,
+  after which the loop goes on. Requests run concurrently; `notifications/cancelled` with a `requestId` stops that
+  call.
 - MCP: each operation is a tool with its schemas and annotations; the output is the tool's structured content, an
-  error the tool's error result with the error object as text.
+  error the tool's error result with the error object as text, plus a failed check's report as structured content
+  and text.
 
 `--matchstick <path>` names the executable to run; by default `matchstick` on `PATH`. No operation reports progress.
 

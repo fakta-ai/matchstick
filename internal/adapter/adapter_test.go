@@ -33,9 +33,10 @@ func (f *fakeMatchstick) exec(ctx context.Context, args []string, stdin []byte) 
 	switch args[0] {
 	case "--help":
 		return []byte(`{"tools":[{"name":"echo","description":"Echoes.","inputSchema":{"type":"object"},` +
-			`"outputSchema":{"type":"object"},"annotations":{"readOnlyHint":true,"destructiveHint":false,` +
-			`"idempotentHint":true,"openWorldHint":false}},{"name":"fail","inputSchema":{"type":"object"}},` +
-			`{"name":"slow","inputSchema":{"type":"object"}}]}`), nil, 0, nil
+				`"outputSchema":{"type":"object"},"annotations":{"readOnlyHint":true,"destructiveHint":false,` +
+				`"idempotentHint":true,"openWorldHint":false}},{"name":"fail","inputSchema":{"type":"object"}},` +
+				`{"name":"slow","inputSchema":{"type":"object"}},{"name":"thing_check","inputSchema":{"type":"object"}}]}`),
+			nil, 0, nil
 	case "echo":
 		return []byte(`{"got":` + string(stdin) + `}`), nil, 0, nil
 	case "fail":
@@ -43,6 +44,10 @@ func (f *fakeMatchstick) exec(ctx context.Context, args []string, stdin []byte) 
 	case "slow":
 		<-ctx.Done()
 		return nil, []byte(`{"error":{"code":"internal","message":"killed"}}`), 1, nil
+	case "thing":
+		// A failed check: its report on stdout, check_failed on stderr, exit 1.
+		return []byte(`{"ok":false,"checks":[{"name":"key","status":"fail"}]}` + "\n"),
+			[]byte(`{"error":{"code":"check_failed","message":"key: refused"}}`), 1, nil
 	}
 	return nil, nil, 0, nil
 }
@@ -103,6 +108,24 @@ func TestRPC(t *testing.T) {
 		if c[0] == "echo" && strings.Join(c, " ") != "echo --json --input -" {
 			t.Errorf("ran %v", c)
 		}
+	}
+}
+
+func TestRPCFailedCheckKeepsItsReport(t *testing.T) {
+	f := &fakeMatchstick{}
+	got := rpcSession(t, f, `{"jsonrpc":"2.0","id":1,"method":"thing_check","params":{}}`)
+	if len(got) != 1 {
+		t.Fatalf("responses %v", got)
+	}
+	e := got[0]["error"].(map[string]any)
+	data := e["data"].(map[string]any)
+	report, _ := json.Marshal(data["result"])
+	if e["code"].(float64) != rpcServerError || data["code"] != op.CodeCheckFailed ||
+		string(report) != `{"checks":[{"name":"key","status":"fail"}],"ok":false}` {
+		t.Errorf("error %v", e)
+	}
+	if c := f.calls[len(f.calls)-1]; strings.Join(c, " ") != "thing check --json --input -" {
+		t.Errorf("ran %v", c)
 	}
 }
 
@@ -169,7 +192,7 @@ func TestMCP(t *testing.T) {
 	}
 	defer func() { _ = session.Close() }()
 	list, err := session.ListTools(ctx, nil)
-	if err != nil || len(list.Tools) != 3 || !list.Tools[0].Annotations.ReadOnlyHint {
+	if err != nil || len(list.Tools) != 4 || !list.Tools[0].Annotations.ReadOnlyHint {
 		t.Fatalf("tools %+v %v", list, err)
 	}
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "echo", Arguments: map[string]any{"pool": "build"}})
@@ -182,6 +205,13 @@ func TestMCP(t *testing.T) {
 	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "fail", Arguments: map[string]any{}})
 	if err != nil || !res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, op.CodeInvalidInput) {
 		t.Errorf("fail: %+v %v", res, err)
+	}
+	res, err = session.CallTool(ctx, &mcp.CallToolParams{Name: "thing_check", Arguments: map[string]any{}})
+	if err != nil || !res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, op.CodeCheckFailed) {
+		t.Fatalf("failed check: %+v %v", res, err)
+	}
+	if b, _ := json.Marshal(res.StructuredContent); string(b) != `{"checks":[{"name":"key","status":"fail"}],"ok":false}` {
+		t.Errorf("failed check's report %s", b)
 	}
 }
 

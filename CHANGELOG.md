@@ -21,6 +21,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 - `matchstick github-app check`: from the configuration and secret mount `run` uses, checks that GitHub accepts the
   key, that the App is installed on the configured owner (reporting the installation ID), that the installation has
   the permissions matchstick needs, and that the runner group exists for it; one entry per check, exit 1 on a failure.
+  Over `matchstick-adapter`, a failed check's report comes with the error (`data.result` in JSON-RPC, structured
+  content in MCP).
 - `docs/setup.md`: setting up from nothing to a first job, including the Azure custom role's exact actions and storing
   the key with the External Secrets Operator.
 - An operation's `--help` lists its output's fields.

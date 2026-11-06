@@ -54,7 +54,8 @@ func Tools(ctx context.Context, run Exec) ([]op.Tool, error) {
 	return out.Tools, nil
 }
 
-// Call runs one operation, named by its tool name, with params as its input and returns its output.
+// Call runs one operation, named by its tool name, with params as its input and returns its output. When the call
+// fails but printed a JSON result, such as a failed check's report, that result comes back with the error.
 func Call(ctx context.Context, run Exec, name string, params json.RawMessage) (json.RawMessage, *op.Error) {
 	if len(bytes.TrimSpace(params)) == 0 || string(bytes.TrimSpace(params)) == "null" {
 		params = json.RawMessage("{}")
@@ -70,6 +71,9 @@ func Call(ctx context.Context, run Exec, name string, params json.RawMessage) (j
 		}
 		if json.Unmarshal(stderr, &e) != nil || e.Error == nil {
 			return nil, op.Errorf(op.CodeInternal, "matchstick %s: exit %d: %s", name, code, bytes.TrimSpace(stderr))
+		}
+		if result := bytes.TrimSpace(stdout); len(result) > 0 && json.Valid(result) {
+			return result, e.Error
 		}
 		return nil, e.Error
 	}

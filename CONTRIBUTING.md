@@ -22,6 +22,7 @@ go test -race ./...
 golangci-lint run ./...
 go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 helm lint deploy/chart/matchstick
+helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
 nix build .#matchstick
 ```
 
@@ -54,7 +55,8 @@ fails without it.
 - Update `docs/` and the `Unreleased` section of `CHANGELOG.md` when behaviour changes.
 - Keep each pull request to one concern. Pull requests are merged with a merge commit once CI passes and review
   threads are resolved.
-- Dependabot opens a weekly pull request moving `flake.lock`'s inputs, each to a commit at least 14 days old. One that
-  changes only `flake.lock` needs no review and merges by itself once CI passes.
+- Dependabot opens weekly pull requests moving `flake.lock`'s inputs, the Go modules and the workflows' actions, each
+  to a release or commit at least 14 days old. One that changes only `flake.lock` needs no review and merges by itself
+  once CI passes; one for the Go modules needs `vendorHash` updated before CI passes.
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE).

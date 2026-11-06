@@ -2,6 +2,7 @@
 # release, ghcr.io/<owner>/matchstick:<version> and oci://ghcr.io/<owner>/charts/matchstick:<version>. The image and
 # the chart are signed with Sigstore, keyless: the signature's certificate names this workflow at the tag, and is
 # recorded in Sigstore's public transparency log. The release notes give both digests.
+# Nothing is published unless the tagged commit first passes every check in ci.yml, as that commit defines them.
 name: release
 on:
   push:
@@ -9,7 +10,10 @@ on:
 permissions:
   contents: read
 jobs:
+  check:
+    uses: ./.github/workflows/ci.yml
   release:
+    needs: check
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

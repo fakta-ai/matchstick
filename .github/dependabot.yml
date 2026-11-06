@@ -1,5 +1,7 @@
-# A weekly pull request moving flake.lock's inputs, each to a commit at least 14 days old. One that changes only
-# flake.lock merges by itself once CI passes (workflows codex.yml and dependabot.yml).
+# Weekly pull requests moving dependencies, each to a release or commit at least 14 days old: flake.lock's inputs,
+# the Go modules (one pull request for all of them) and the workflows' actions (one for all of them). One that
+# changes only flake.lock merges by itself once CI passes (workflows codex.yml and dependabot.yml); the others wait
+# for a review as well. A Go modules pull request also needs vendorHash in nix/package.nix updated before CI passes.
 version: 2
 updates:
   - package-ecosystem: nix
@@ -11,4 +13,30 @@ updates:
       default-days: 14
     commit-message:
       prefix: chore
+      include: scope
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      go:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore
+      include: scope
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
       include: scope

@@ -12,14 +12,16 @@ go test -race ./...
 golangci-lint run ./...        # configuration in .golangci.yml
 govulncheck ./...
 helm lint deploy/chart/matchstick
+helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
 nix build .#matchstick         # both executables; runs the tests; checks vendorHash
 bash .github/tests/codex.sh    # the review gate: Dependabot's flake.lock-only pull requests pass without a review
 ```
 
 CI runs exactly these on every pull request (`.github/workflows/ci.yml`, job `check`); `main` accepts changes only
-through pull requests whose `check` passed. A change to `go.sum` updates `vendorHash` in `nix/package.nix`. Dependabot
-opens a weekly pull request for `flake.lock` (`.github/dependabot.yml`); one that changes nothing else merges by itself
-once `check` passes.
+through pull requests whose `check` passed, and a version tag publishes only after `check` passes on the tagged commit.
+A change to `go.sum` updates `vendorHash` in `nix/package.nix`. Dependabot opens weekly pull requests for `flake.lock`,
+the Go modules and the workflows' actions (`.github/dependabot.yml`); one that changes only `flake.lock` merges by
+itself once `check` passes.
 
 ## Design rules
 

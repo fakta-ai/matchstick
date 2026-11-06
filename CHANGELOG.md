@@ -5,6 +5,11 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The release workflow signs the Helm chart: cosign now logs in to the registry the chart is pushed to. 0.3.0's
+  chart was pushed but not signed, so 0.3.0 was not published.
+
 ## [0.3.0] - 2026-11-06
 
 ### Added

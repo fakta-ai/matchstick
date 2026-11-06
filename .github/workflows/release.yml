@@ -172,16 +172,21 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.1.4
-      - name: push
-        id: push
+      # helm push reads Helm's registry configuration; cosign and the chart's attestation read Docker's
+      - name: registry login
         env:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+      - name: push
+        id: push
+        run: |
+          set -euo pipefail
           # the chart's version and appVersion are the release's, so its default image is this release's
           helm package deploy/chart/matchstick --version "${VERSION#v}" --app-version "${VERSION#v}" --destination chart
-          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
           helm push "chart/matchstick-${VERSION#v}.tgz" oci://ghcr.io/fakta-ai/charts 2>&1 | tee push.log
           digest=$(awk '$1 == "Digest:" {print $2}' push.log)
           test -n "$digest" || { echo "::error::helm push printed no digest"; exit 1; }

@@ -1,5 +1,30 @@
 # Operations
 
+## Installing
+
+Each release publishes:
+
+| What | Where |
+|---|---|
+| binaries for Linux and macOS, amd64 and arm64, with `checksums.txt` | the GitHub release |
+| the container image (both executables, CA certificates, no shell, user 65532) | `ghcr.io/fakta-ai/matchstick:<version>` |
+| the Helm chart, its version and `appVersion` the release's | `oci://ghcr.io/fakta-ai/charts/matchstick:<version>` |
+
+The release notes give the image's and the chart's digests. Both are signed with Sigstore, keyless: the signing
+certificate names the release workflow at the version's tag. Check one before you use it:
+
+```sh
+cosign verify ghcr.io/fakta-ai/matchstick@sha256:<digest> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v<version>
+cosign verify ghcr.io/fakta-ai/charts/matchstick@sha256:<digest> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v<version>
+```
+
+Flux checks the chart itself when its `OCIRepository` has `verify.provider: cosign` with that issuer and identity
+(`matchOIDCIdentity`); pin the image with the chart's `image.digest`.
+
 ## Running
 
 ```sh

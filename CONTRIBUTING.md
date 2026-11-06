@@ -12,7 +12,7 @@ Thank you for helping.
 
 ## Setting up
 
-With [Nix](https://nixos.org/), `nix develop` gives a shell with Go, golangci-lint, govulncheck and Helm, and
+With [Nix](https://nixos.org/), `nix develop` gives a shell with Go, golangci-lint, govulncheck, Helm and cosign, and
 `nix build` builds both executables and runs the tests. Without Nix, you need Go (the version in `go.mod`) and
 [golangci-lint](https://golangci-lint.run/) v2.
 

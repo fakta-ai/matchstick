@@ -43,8 +43,9 @@ It creates the runners as Azure virtual machines and registers them with GitHub 
 
 5. In a workflow, ask for a pool's label: `runs-on: linux-x64-large`.
 
-On Kubernetes, the chart in [deploy/chart/matchstick](deploy/chart/matchstick) runs one replica signed in to Azure
-with workload identity.
+On Kubernetes, the chart runs one replica signed in to Azure with workload identity:
+`helm install matchstick oci://ghcr.io/fakta-ai/charts/matchstick --version <version>`. Releases sign the image and the
+chart; [docs/operations.md](docs/operations.md#installing) says how to check them.
 
 Try the planner without a cloud or GitHub:
 

@@ -1,16 +1,12 @@
 package github
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"strconv"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,6 +14,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/fakta-ai/matchstick/internal/naming"
+	"github.com/fakta-ai/matchstick/internal/plan"
 )
 
 func TestRunnersEndpoint(t *testing.T) {
@@ -42,33 +39,87 @@ func TestRunnersEndpoint(t *testing.T) {
 }
 
 func TestListKeepsOnlyThePoolsRunnersAcrossPages(t *testing.T) {
-	ours := naming.New("ci", "build", time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC))
+	f := newFakeGitHub(t)
+	f.addScaleSet("ci-build", nil, nil)
+	busy := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	idle := time.Date(2026, 11, 3, 12, 30, 0, 0, time.UTC)
 	var entries []restRunner
-	for i := range 150 {
+	for i := range 200 {
 		entries = append(entries, restRunner{ID: int64(i + 1), Name: fmt.Sprintf("someone-else-%d", i), Status: "online"})
 	}
-	entries[120] = restRunner{ID: 121, Name: ours, Status: "online", Busy: true}
-	entries[3] = restRunner{ID: 4, Name: naming.New("ci", "test", time.Now()), Status: "online"}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/orgs/acme/actions/runners" || r.Header.Get("Authorization") != "Bearer tok" {
-			http.Error(w, "no", http.StatusNotFound)
-			return
-		}
-		page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-		start := min((page-1)*100, len(entries))
-		end := min(start+100, len(entries))
-		_ = json.NewEncoder(w).Encode(map[string]any{"total_count": len(entries), "runners": entries[start:end]})
-	}))
-	defer srv.Close()
-	s := &ScaleSet{instance: "ci", pool: "build", client: &Client{rest: &restClient{api: srv.URL,
-		runnersPath: "/orgs/acme/actions/runners", creds: Credentials{Token: "tok"}, http: srv.Client()}}}
-	got, err := s.List(context.Background())
+	entries[10] = restRunner{ID: 11, Name: naming.New("ci", "build", busy), Status: "online", Busy: true}
+	entries[150] = restRunner{ID: 151, Name: naming.New("ci", "build", idle), Status: "offline"}
+	entries[3] = restRunner{ID: 4, Name: naming.New("ci", "test", busy), Status: "online"}          // another pool
+	entries[4] = restRunner{ID: 5, Name: naming.New("other", "build", busy), Status: "online"}      // another instance
+	entries[5] = restRunner{ID: 6, Name: naming.Prefix("ci", "build") + "manual", Status: "online"} // not one of ours
+	f.configure(func() { f.runners = entries })
+	s, err := f.client().FindScaleSet(t.Context(), "ci", "build", "linux")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != 121 || !got[0].Online || !got[0].Busy ||
-		!got[0].CreatedAt.Equal(time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)) {
-		t.Errorf("got %+v", got)
+	got, err := s.List(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []plan.Runner{
+		{ID: 11, Name: entries[10].Name, CreatedAt: busy, Online: true, Busy: true},
+		{ID: 151, Name: entries[150].Name, CreatedAt: idle},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+	if pages := f.log("list"); !slices.Equal(pages, []string{"list page=1 token=pat", "list page=2 token=pat"}) {
+		t.Errorf("read %q", pages)
+	}
+}
+
+func TestListFailsWhenTheRunnerListCannotBeRead(t *testing.T) {
+	f := newFakeGitHub(t)
+	f.addScaleSet("ci-build", nil, nil)
+	f.configure(func() { f.failList = true })
+	s, err := f.client().FindScaleSet(t.Context(), "ci", "build", "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.List(t.Context()); err == nil {
+		t.Errorf("got %+v and no error", got)
+	}
+}
+
+func TestInstallationTokenIsRenewedBeforeItExpires(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeGitHub(t)
+	f.configure(func() { f.appClientID, f.appKey = "Iv1.abc", key })
+	pemKey := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	c, err := newRESTClient(f.srv.URL+"/acme",
+		Credentials{AppClientID: "Iv1.abc", AppInstallationID: 42, AppPrivateKey: pemKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.now = f.now
+	// Each installation token lasts an hour.
+	for _, step := range []struct {
+		after time.Duration
+		token string
+	}{
+		{0, "installation-1"},
+		{54 * time.Minute, "installation-1"}, // six minutes left: still used
+		{2 * time.Minute, "installation-2"},  // four minutes left: renewed
+		{3 * time.Hour, "installation-3"},    // long expired: renewed
+	} {
+		f.advance(step.after)
+		if _, err := c.runners(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if got := f.log("list"); got[len(got)-1] != "list page=1 token="+step.token {
+			t.Fatalf("after %s: %q", step.after, got)
+		}
+	}
+	if issued := f.log("installation token"); len(issued) != 3 {
+		t.Errorf("issued %q", issued)
 	}
 }
 

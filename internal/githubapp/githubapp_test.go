@@ -125,7 +125,7 @@ const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY----
 func TestParseConversion(t *testing.T) {
 	body, _ := json.Marshal(map[string]any{"id": 42, "slug": "acme-runners", "name": "acme-runners",
 		"client_id": "Iv23liAcme", "html_url": "https://github.com/apps/acme-runners", "pem": pem,
-		"client_secret": "s", "webhook_secret": nil, "owner": map[string]any{"login": "acme"}})
+		"client_secret": "s", "webhook_secret": nil, "owner": map[string]any{"login": "acme", "type": "Organization"}})
 	c, err := ParseConversion(http.StatusCreated, body)
 	if err != nil || c.ID != 42 || c.ClientID != "Iv23liAcme" || c.Owner.Login != "acme" || c.PEM != pem {
 		t.Fatalf("%+v %v", c, err)
@@ -267,13 +267,38 @@ func TestEvaluateReportsIDs(t *testing.T) {
 	}
 }
 
+func TestCheckOwner(t *testing.T) {
+	app := func(login, typ string) Conversion {
+		var c Conversion
+		c.Slug, c.Owner.Login, c.Owner.Type = "acme-runners", login, typ
+		return c
+	}
+	for _, c := range []struct {
+		app         Conversion
+		login, kind string
+		ok          bool
+	}{
+		{app("acme", "Organization"), "acme", "Organization", true},
+		{app("Acme", "Organization"), "acme", "Organization", true},
+		{app("octocat", "User"), "octocat", "User", true},
+		{app("mallory", "User"), "acme", "Organization", false},
+		{app("mallory", "Organization"), "acme", "Organization", false},
+		{app("acme", "User"), "acme", "Organization", false},
+		{app("", ""), "acme", "Organization", false},
+	} {
+		if err := CheckOwner(c.app, c.login, c.kind); (err == nil) != c.ok {
+			t.Errorf("owner %s %s, asked %s %s: %v", c.app.Owner.Type, c.app.Owner.Login, c.kind, c.login, err)
+		}
+	}
+}
+
 func TestFlowHandler(t *testing.T) {
 	m, err := NewManifest("acme-runners", Organization, "http://127.0.0.1:4000/callback")
 	if err != nil {
 		t.Fatal(err)
 	}
 	codes := make(chan string, 1)
-	h := flowHandler("127.0.0.1:4000", "s3cret", m,
+	h := flowHandler("127.0.0.1:4000", "p4ge", "s3cret", m,
 		RegisterURL("https://github.com", "acme", "s3cret"), "acme", codes)
 	get := func(host, path string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "http://"+host+path, nil)
@@ -282,7 +307,13 @@ func TestFlowHandler(t *testing.T) {
 		return w
 	}
 
-	page := get("127.0.0.1:4000", "/")
+	// Without the page's token, nothing reveals the state.
+	for _, path := range []string{"/", "/p4g", "/p4ge0", "/other"} {
+		if w := get("127.0.0.1:4000", path); w.Code != http.StatusNotFound || strings.Contains(w.Body.String(), "s3cret") {
+			t.Errorf("%s: %d %s", path, w.Code, w.Body)
+		}
+	}
+	page := get("127.0.0.1:4000", "/p4ge")
 	body := page.Body.String()
 	if page.Code != http.StatusOK ||
 		!strings.Contains(body, `action="https://github.com/organizations/acme/settings/apps/new?state=s3cret"`) ||
@@ -299,7 +330,7 @@ func TestFlowHandler(t *testing.T) {
 		t.Errorf("posted manifest %q: %v", unescaped, err)
 	}
 
-	if w := get("evil.example:4000", "/"); w.Code != http.StatusMisdirectedRequest {
+	if w := get("evil.example:4000", "/p4ge"); w.Code != http.StatusMisdirectedRequest {
 		t.Errorf("another host: %d", w.Code)
 	}
 	if w := get("127.0.0.1:4000", "/callback?code=c1&state=wrong"); w.Code != http.StatusBadRequest {

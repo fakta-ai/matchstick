@@ -86,6 +86,7 @@ type Conversion struct {
 	PEM      string `json:"pem"`
 	Owner    struct {
 		Login string `json:"login"`
+		Type  string `json:"type"`
 	} `json:"owner"`
 }
 
@@ -123,6 +124,17 @@ func ParseConversion(status int, body []byte) (Conversion, error) {
 		return Conversion{}, fmt.Errorf("exchanging the code: GitHub's answer lacks %s", strings.Join(missing, ", "))
 	}
 	return c, nil
+}
+
+// CheckOwner checks that GitHub registered the App under the account asked for: login (GitHub ignores its case) and
+// accountType, "Organization" or "User". A code for another account's App, delivered to the local page by someone
+// else, fails here.
+func CheckOwner(c Conversion, login, accountType string) error {
+	if !strings.EqualFold(c.Owner.Login, login) || c.Owner.Type != accountType {
+		return fmt.Errorf("GitHub's answer is App %s owned by %s %q, not the %s %q this run asked for", c.Slug,
+			strings.ToLower(c.Owner.Type), c.Owner.Login, strings.ToLower(accountType), login)
+	}
+	return nil
 }
 
 // InstallURL returns where the App is installed, from its page's URL.

@@ -79,13 +79,13 @@ func Create(ctx context.Context, o CreateOptions) (Created, error) {
 		return Created{}, op.Errorf(op.CodeInvalidInput, "keyFile is required")
 	}
 	c := newClient(o.Target.API)
-	organisation := o.Target.Owner
+	organisation, ownerType := o.Target.Owner, "Organization"
 	if o.Target.Kind == Repository {
 		kind, err := c.accountType(ctx, o.Target.Owner)
 		if err != nil {
 			return Created{}, op.Errorf(op.CodeUnavailable, "is %s an organisation or a user? %v", o.Target.Owner, err)
 		}
-		if kind != "Organization" {
+		if ownerType = kind; kind != "Organization" {
 			organisation = ""
 		}
 	}
@@ -107,7 +107,12 @@ func Create(ctx context.Context, o CreateOptions) (Created, error) {
 		return Created{}, op.Errorf(op.CodeUnavailable, "listening on a loopback address: %v", err)
 	}
 	addr := listener.Addr().String()
-	state, err := randomState()
+	state, err := randomToken()
+	if err != nil {
+		_ = listener.Close()
+		return Created{}, err
+	}
+	pageToken, err := randomToken()
 	if err != nil {
 		_ = listener.Close()
 		return Created{}, err
@@ -118,11 +123,11 @@ func Create(ctx context.Context, o CreateOptions) (Created, error) {
 		return Created{}, op.Errorf(op.CodeInvalidInput, "%v", err)
 	}
 	codes := make(chan string, 1)
-	server := &http.Server{Handler: flowHandler(addr, state, manifest, RegisterURL(o.Target.Web, organisation, state),
-		o.Target.Name(), codes), ReadHeaderTimeout: 10 * time.Second}
+	server := &http.Server{Handler: flowHandler(addr, pageToken, state, manifest,
+		RegisterURL(o.Target.Web, organisation, state), o.Target.Name(), codes), ReadHeaderTimeout: 10 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 
-	page := "http://" + addr + "/"
+	page := "http://" + addr + "/" + pageToken
 	account := "an owner of " + o.Target.Owner
 	if organisation == "" {
 		account = o.Target.Owner
@@ -155,6 +160,9 @@ func Create(ctx context.Context, o CreateOptions) (Created, error) {
 	if err != nil {
 		return Created{}, op.Errorf(op.CodeUnavailable, "%v", err)
 	}
+	if err := CheckOwner(app, o.Target.Owner, ownerType); err != nil {
+		return Created{}, op.Errorf(op.CodeUnavailable, "%v; its key was not written", err)
+	}
 	out := Created{AppID: app.ID, ClientID: app.ClientID, Slug: app.Slug, Name: app.Name, Owner: app.Owner.Login,
 		HTMLURL: app.HTMLURL, InstallURL: InstallURL(app.HTMLURL), KeyFile: o.KeyFile}
 	if err := writeKey(key, app.PEM); err != nil {
@@ -180,13 +188,19 @@ func writeKey(f *os.File, pem string) error {
 	return f.Close()
 }
 
-// flowHandler serves the page that posts the manifest to registerURL, and receives GitHub's redirect with the code,
-// which it sends on codes once. It answers only requests addressed to addr.
-func flowHandler(addr, state string, manifest Manifest, registerURL, target string, codes chan<- string) http.Handler {
+// flowHandler serves the page that posts the manifest to registerURL at /<pageToken> only, and receives GitHub's
+// redirect with the code, which it sends on codes once. It answers only requests addressed to addr. Without the
+// page's token, another local user cannot read the state the redirect must carry.
+func flowHandler(addr, pageToken, state string, manifest Manifest, registerURL, target string,
+	codes chan<- string) http.Handler {
 	manifestJSON, _ := json.Marshal(manifest)
 	var once sync.Once
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /{page}", func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.PathValue("page")), []byte(pageToken)) != 1 {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		_ = pageTemplate.Execute(w, map[string]any{"Action": registerURL,
@@ -211,10 +225,11 @@ func flowHandler(addr, state string, manifest Manifest, registerURL, target stri
 	})
 }
 
-func randomState() (string, error) {
+// randomToken returns 32 random bytes in hexadecimal: the redirect's state, or the page's path.
+func randomToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("random state: %w", err)
+		return "", fmt.Errorf("random token: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }

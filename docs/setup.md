@@ -41,10 +41,10 @@ mkdir -p secrets
 matchstick github-app create --org acme --name acme-runners --key-file secrets/github-app-private-key
 ```
 
-matchstick opens a page in your browser, served on `127.0.0.1` only, that sends the App's definition to GitHub. Sign in
-to GitHub as an owner of `acme` if asked, check the name, and select **Create GitHub App**. GitHub sends the browser
-back to matchstick, which prints the App as JSON and writes its private key to `secrets/github-app-private-key` with
-mode 0600:
+matchstick opens a page in your browser, served on `127.0.0.1` only at an address with a random token, that sends the
+App's definition to GitHub. Sign in to GitHub as an owner of `acme` if asked, check the name, and select **Create
+GitHub App**. GitHub sends the browser back to matchstick, which checks that the App is `acme`'s, prints it as JSON
+and writes its private key to `secrets/github-app-private-key` with mode 0600:
 
 ```json
 {
@@ -117,7 +117,7 @@ the vault (here Azure Key Vault, `acme-vault`), then let the operator keep the S
 
 ```sh
 az keyvault secret set --vault-name acme-vault --name matchstick-github-app-private-key \
-  --file secrets/github-app-private-key
+  --file secrets/github-app-private-key --output none   # without --output none, az prints the key
 ```
 
 ```yaml

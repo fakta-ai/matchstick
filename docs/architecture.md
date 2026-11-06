@@ -309,11 +309,13 @@ schema, runs the operation and checks the output against its schema.
 `plan` and `status` read demand from the scale set's statistics, as GitHub reports them; `null` when it reports none.
 A drain lasts until the process restarts; to keep a pool empty, set its `maximum` to 0.
 
-`github-app create` serves a page on `127.0.0.1` (a random port) answering only requests addressed to that address;
-the page posts the manifest to GitHub with a random `state`, and GitHub's redirect back is accepted only with that
-`state`. The private key goes to a file created with mode 0600 before the flow starts, removed if the flow fails. The
-manifest (`githubapp.NewManifest`), GitHub's answer (`githubapp.ParseConversion`) and the checks' verdicts
-(`githubapp.Evaluate`, over what `githubapp.Gather` read) are pure functions.
+`github-app create` serves a page on `127.0.0.1` (a random port), at a random path, answering only requests addressed
+to that address; another local user who cannot see the printed address cannot read the page. The page posts the
+manifest to GitHub with a random `state`, and GitHub's redirect back is accepted only with that `state`. The App
+GitHub returns must be owned by the organisation or repository owner asked for (`githubapp.CheckOwner`), or its key is
+not written. The private key goes to a file created with mode 0600 before the flow starts, removed if the flow fails.
+The manifest (`githubapp.NewManifest`), GitHub's answer (`githubapp.ParseConversion`, `githubapp.CheckOwner`) and the
+checks' verdicts (`githubapp.Evaluate`, over what `githubapp.Gather` read) are pure functions.
 
 The command line (`internal/cli`):
 

@@ -6,11 +6,59 @@ users:
   - name: actions
     shell: /bin/bash
 write_files:
+  - path: /usr/local/bin/matchstick-claim
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env python3
+      # Claim this VM's runner configuration from matchstick and print it.
+      # Exit 0 with the configuration; 1 when matchstick refuses, its certificate does not match, or time runs out.
+      import base64, json, ssl, sys, time, urllib.error, urllib.request
+
+      IMDS = "http://169.254.169.254/metadata"
+      DEADLINE = time.monotonic() + 600  # the pool's registrationTimeout, by default 10 minutes
+      direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # IMDS and matchstick: no proxy
+
+      def imds(path):
+          req = urllib.request.Request(IMDS + path, headers={"Metadata": "true"})
+          with direct.open(req, timeout=10) as r:
+              return r.read()
+
+      def retry(what, f):
+          while True:
+              try:
+                  return f()
+              except (OSError, ValueError) as e:
+                  if time.monotonic() > DEADLINE:
+                      sys.exit(f"{what}: {e}")
+                  time.sleep(5)
+
+      boot = retry("user data", lambda: json.loads(base64.b64decode(
+          imds("/instance/compute/userData?api-version=2021-02-01&format=text"))))
+      tls = ssl.create_default_context(cadata=boot["claimCertificate"])  # trust only this certificate
+      claimer = urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=tls))
+
+      def claim():
+          proof = json.loads(imds("/attested/document?api-version=2021-02-01"))
+          body = json.dumps({"machine": boot["machine"], "proof": proof}).encode()
+          req = urllib.request.Request(boot["claimURL"], data=body, headers={"Content-Type": "application/json"})
+          try:
+              with claimer.open(req, timeout=60) as r:
+                  return json.load(r)["jitConfig"]
+          except urllib.error.HTTPError as e:
+              if e.code < 500:
+                  sys.exit(f"claim refused: {e.code} {e.read().decode(errors='replace')}")
+              raise
+          except urllib.error.URLError as e:
+              if isinstance(e.reason, ssl.SSLCertVerificationError):
+                  sys.exit(f"claim endpoint not trusted: {e.reason}")
+              raise
+
+      print(retry("claim", claim))
   - path: /usr/local/bin/matchstick-runner
     permissions: "0755"
     content: |
       #!/bin/bash
-      # Run GitHub's runner for exactly one job with the JIT configuration from the instance metadata, then power off.
+      # Run GitHub's runner for exactly one job with the configuration claimed from matchstick, then power off.
       set -uo pipefail
       trap 'systemctl poweroff' EXIT
       version=2.338.2
@@ -24,13 +72,7 @@ write_files:
         tar -xzf /tmp/runner.tar.gz -C "$dir"
         chown -R actions:actions "$dir"
       fi
-      for attempt in 1 2 3 4 5; do
-        jit=$(curl -fsS -H Metadata:true \
-          "http://169.254.169.254/metadata/instance/compute/userData?api-version=2021-01-01&format=text" | base64 -d) \
-          && [ -n "$jit" ] && break
-        sleep 5
-      done
-      [ -n "${jit:-}" ] || exit 1
+      jit=$(/usr/local/bin/matchstick-claim) && [ -n "$jit" ] || exit 1
       runuser -u actions -- "$dir/run.sh" --jitconfig "$jit"
   - path: /etc/systemd/system/matchstick-runner.service
     content: |

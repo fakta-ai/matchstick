@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"time"
 
@@ -29,8 +30,11 @@ type Config struct {
 	// Interval is the longest time between two rounds of a pool.
 	Interval plan.Duration `json:"interval,omitempty"`
 	Listen   Listen        `json:"listen,omitzero"`
-	GitHub   *GitHub       `json:"github,omitempty"`
-	Azure    *Azure        `json:"azure,omitempty"`
+	// ClaimURL is the address machines post their claim to: https://<host>[:<port>][/<path>]. The host must reach
+	// listen.claim from the machines' network. Required with azure.
+	ClaimURL string  `json:"claimURL,omitempty"`
+	GitHub   *GitHub `json:"github,omitempty"`
+	Azure    *Azure  `json:"azure,omitempty"`
 	// Fake replaces GitHub and the cloud with pools held in this file, to try the planner.
 	Fake  *Fake  `json:"fake,omitempty"`
 	Pools []Pool `json:"pools"`
@@ -42,6 +46,8 @@ type Listen struct {
 	Metrics string `json:"metrics,omitempty"`
 	// Admin serves the drain endpoint; keep it on a loopback address.
 	Admin string `json:"admin,omitempty"`
+	// Claim serves the claim endpoint, over TLS, when ClaimURL is set.
+	Claim string `json:"claim,omitempty"`
 }
 
 // GitHub says where the pools' scale sets live and how to sign in. The credential itself is a secret, read
@@ -126,6 +132,7 @@ const (
 	DefaultRegistrationTimeout = 10 * time.Minute
 	DefaultMetrics             = ":9090"
 	DefaultAdmin               = "127.0.0.1:9091"
+	DefaultClaim               = ":8443"
 	DefaultRunnerGroup         = "default"
 )
 
@@ -161,6 +168,9 @@ func (c *Config) applyDefaults() {
 	if c.Listen.Admin == "" {
 		c.Listen.Admin = DefaultAdmin
 	}
+	if c.Listen.Claim == "" {
+		c.Listen.Claim = DefaultClaim
+	}
 	if c.GitHub != nil && c.GitHub.RunnerGroup == "" {
 		c.GitHub.RunnerGroup = DefaultRunnerGroup
 	}
@@ -189,7 +199,7 @@ func (c *Config) validate() error {
 		"instance %q: lower-case letters and digits, starting with a letter, at most %d characters",
 		c.Instance, maxInstanceLength)
 	check(c.Interval > 0, "interval must be positive")
-	for _, addr := range []string{c.Listen.Metrics, c.Listen.Admin} {
+	for _, addr := range []string{c.Listen.Metrics, c.Listen.Admin, c.Listen.Claim} {
 		_, _, err := net.SplitHostPort(addr)
 		check(err == nil, "listen address %q: %v", addr, err)
 	}
@@ -210,6 +220,12 @@ func (c *Config) validate() error {
 		a := c.Azure
 		check(a.SubscriptionID != "" && a.ResourceGroup != "" && a.Location != "" && a.SubnetID != "",
 			"azure needs subscriptionID, resourceGroup, location and subnetID")
+		check(c.ClaimURL != "", "claimURL is required with azure: machines claim their runner configuration there")
+	}
+	if c.ClaimURL != "" {
+		u, err := url.Parse(c.ClaimURL)
+		check(err == nil && u.Scheme == "https" && u.Hostname() != "" && u.User == nil && u.RawQuery == "" &&
+			u.Fragment == "", "claimURL %q: want https://<host>[:<port>][/<path>]", c.ClaimURL)
 	}
 	check(len(c.Pools) > 0, "at least one pool is required")
 	seen := map[string]bool{}

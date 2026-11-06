@@ -5,6 +5,7 @@ package azure
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -69,6 +70,7 @@ type Provider struct {
 	pool     string
 	vms      *armcompute.VirtualMachinesClient
 	nics     *armnetwork.InterfacesClient
+	attest   *attestation
 	now      func() time.Time
 
 	mu        sync.Mutex
@@ -88,8 +90,12 @@ func New(cloud Cloud, shape Shape, instance, pool string, cred azcore.TokenCrede
 	if err != nil {
 		return nil, err
 	}
+	roots, err := azureRoots()
+	if err != nil {
+		return nil, err
+	}
 	return &Provider{cloud: cloud, shape: shape, instance: instance, pool: pool, vms: vms, nics: nics,
-		now: time.Now}, nil
+		attest: newAttestation(roots, httpDownload()), now: time.Now}, nil
 }
 
 func nicName(machine string) string { return machine + "-nic" }
@@ -210,7 +216,7 @@ func (p *Provider) vm(spec provider.CreateSpec, nicID string, tags map[string]*s
 				OSDisk:         p.osDisk(spec.Name),
 			},
 			OSProfile: profile,
-			UserData:  new(base64.StdEncoding.EncodeToString([]byte(spec.JITConfig))),
+			UserData:  userData(spec.Bootstrap),
 			NetworkProfile: &armcompute.NetworkProfile{
 				NetworkInterfaces: []*armcompute.NetworkInterfaceReference{{
 					ID: new(nicID),
@@ -337,6 +343,35 @@ func (p *Provider) Delete(ctx context.Context, name string) error {
 		return fmt.Errorf("azure: deleting network interface of %s: %w", name, err)
 	}
 	return nil
+}
+
+// Identify checks that proof is an attested document of the VM name, which must be one of the pool's. See
+// attestation.check for the document's checks.
+func (p *Provider) Identify(ctx context.Context, name string, proof json.RawMessage) error {
+	doc, err := p.attest.check(ctx, proof, p.cloud.SubscriptionID, p.now())
+	if err != nil {
+		return err
+	}
+	vm, err := p.vms.Get(ctx, p.cloud.ResourceGroup, name, nil)
+	switch {
+	case notFound(err):
+		return notProven("no VM %s", name)
+	case err != nil:
+		return fmt.Errorf("azure: VM %s: %w", name, err)
+	case !p.owns(vm.Tags):
+		return notProven("VM %s is not this pool's", name)
+	case vm.Properties == nil || !strings.EqualFold(deref(vm.Properties.VMID), doc.VMID):
+		return notProven("the document's vmId %s is not VM %s's", doc.VMID, name)
+	}
+	return nil
+}
+
+// userData encodes a machine's bootstrap as user data; none if it is empty.
+func userData(bootstrap []byte) *string {
+	if len(bootstrap) == 0 {
+		return nil
+	}
+	return new(base64.StdEncoding.EncodeToString(bootstrap))
 }
 
 // machine maps a VM and its instance view to the core's machine.

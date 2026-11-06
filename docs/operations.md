@@ -7,7 +7,9 @@ matchstick run --config matchstick.yaml
 ```
 
 Run one copy. Replace it rather than run two at once (on Kubernetes: one replica, `Recreate`). A restart is safe at any
-time: the next start finds every machine and registration again.
+time: the next start finds every machine and registration again. Machines still booting when it restarts cannot claim
+their runner configuration, which only the old process held: they power off, and the new process deletes them and
+creates replacements as jobs need them.
 
 ## Watching
 
@@ -17,8 +19,9 @@ time: the next start finds every machine and registration again.
   `matchstick_creations_total`, `matchstick_creation_failures_total{kind}`, `matchstick_deletions_total{reason}`,
   `matchstick_registration_removals_total{reason}`, `matchstick_rounds_total{result}`,
   `matchstick_round_duration_seconds`, `matchstick_last_success_timestamp_seconds`, `matchstick_creation_paused`,
-  `matchstick_draining`, each with a `pool` label.
-- Logs: JSON lines on stdout, one per action, with `pool`, `machine` and `reason`.
+  `matchstick_draining`, `matchstick_claims_total{result}` (`released`, `refused`, `failed`), each with a `pool`
+  label.
+- Logs: JSON lines on stdout, one per action, with `pool`, `machine` and `reason`; a refused claim says why.
 
 Suggested alerts: `time() - matchstick_last_success_timestamp_seconds > 300`; `matchstick_creation_paused == 1` for
 more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"}[1h]) > 3`.

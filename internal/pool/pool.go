@@ -37,10 +37,21 @@ type Settings struct {
 	Limits      plan.Limits
 	MaxLifetime time.Duration
 	Interval    time.Duration
+	// Claim is where machines claim their runner configuration; it goes into every machine's bootstrap.
+	Claim Claim
 }
 
-// Pool is one pool's loop and the little it remembers between rounds: demand, drain and backoff, all of which are
-// rebuilt or reset harmlessly after a restart.
+// Claim is the claim endpoint as machines see it.
+type Claim struct {
+	// URL is the endpoint machines post their claim to.
+	URL string
+	// Certificate is the endpoint's certificate, PEM: the only one machines trust for URL.
+	Certificate string
+}
+
+// Pool is one pool's loop and the little it remembers between rounds: demand, drain, backoff, and the runner
+// configurations of machines that have not claimed theirs yet. All of it is rebuilt or reset harmlessly after a
+// restart.
 type Pool struct {
 	settings Settings
 	machines provider.Provider
@@ -57,13 +68,14 @@ type Pool struct {
 	capacityBackoff time.Duration
 	unregistered    int
 	lastSuccess     time.Time
+	held            map[string]held
 }
 
 // New returns a pool. now is the clock; tests pass their own.
 func New(s Settings, machines provider.Provider, runners github.Runners, m *metrics.Metrics, log *slog.Logger,
 	now func() time.Time) *Pool {
 	return &Pool{settings: s, machines: machines, runners: runners, metrics: m, now: now,
-		log: log.With("pool", s.Name), wake: make(chan struct{}, 1)}
+		log: log.With("pool", s.Name), wake: make(chan struct{}, 1), held: map[string]held{}}
 }
 
 // Name returns the pool's name.
@@ -162,6 +174,7 @@ func (p *Pool) Round(ctx context.Context) (plan.Decision, error) {
 	p.mu.Unlock()
 	p.metrics.LastSuccess.WithLabelValues(p.settings.Name).Set(float64(o.Now.Unix()))
 	d := plan.Decide(o, p.settings.Limits)
+	p.dropHeld(o, d)
 	p.report(o)
 	p.trackUnregistered(o, d)
 	actCtx, cancel := context.WithTimeout(ctx, ActTimeout)
@@ -251,9 +264,19 @@ func (p *Pool) create(ctx context.Context) {
 		log.Warn("runner registration failed", "error", err)
 		return
 	}
-	err = p.machines.Create(ctx, provider.CreateSpec{Name: name, JITConfig: jit.Config,
+	bootstrap, err := p.bootstrap(name)
+	if err != nil {
+		p.metrics.CreationFailures.WithLabelValues(p.settings.Name, "cloud").Inc()
+		log.Warn("machine creation failed", "error", err)
+		p.removeAfterFailure(ctx, log, jit.RunnerID)
+		return
+	}
+	// Held before the cloud is asked, so a machine that boots quickly finds its configuration.
+	p.hold(name, jit, now)
+	err = p.machines.Create(ctx, provider.CreateSpec{Name: name, Bootstrap: bootstrap,
 		ExpiresAt: now.Add(p.settings.MaxLifetime)})
 	if err != nil {
+		p.drop(name)
 		kind := "cloud"
 		if errors.Is(err, provider.ErrCapacity) {
 			kind = "capacity"
@@ -261,10 +284,7 @@ func (p *Pool) create(ctx context.Context) {
 		}
 		p.metrics.CreationFailures.WithLabelValues(p.settings.Name, kind).Inc()
 		log.Warn("machine creation failed", "kind", kind, "error", err)
-		// The registration has no machine; remove it now rather than wait for the orphan rule.
-		if err := p.runners.Remove(context.WithoutCancel(ctx), jit.RunnerID); err != nil {
-			log.Warn("registration removal failed; a later round removes it", "error", err)
-		}
+		p.removeAfterFailure(ctx, log, jit.RunnerID)
 		return
 	}
 	p.mu.Lock()
@@ -272,6 +292,14 @@ func (p *Pool) create(ctx context.Context) {
 	p.mu.Unlock()
 	p.metrics.Creations.WithLabelValues(p.settings.Name).Inc()
 	log.Info("machine created")
+}
+
+// removeAfterFailure removes the registration of a machine that was not created now, rather than wait for the orphan
+// rule.
+func (p *Pool) removeAfterFailure(ctx context.Context, log *slog.Logger, runnerID int64) {
+	if err := p.runners.Remove(context.WithoutCancel(ctx), runnerID); err != nil {
+		log.Warn("registration removal failed; a later round removes it", "error", err)
+	}
 }
 
 func (p *Pool) paused() bool {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -24,14 +25,15 @@ func freeAddr(t *testing.T) string {
 	return l.Addr().String()
 }
 
-func TestRunServesHealthMetricsAndDrain(t *testing.T) {
-	metricsAddr, adminAddr := freeAddr(t), freeAddr(t)
+func TestRunServesHealthMetricsDrainAndClaims(t *testing.T) {
+	metricsAddr, adminAddr, claimAddr := freeAddr(t), freeAddr(t), freeAddr(t)
 	example, err := os.ReadFile("../../examples/fake.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := strings.Replace(string(example), "instance: demo\n",
-		"instance: demo\nlisten: {metrics: \""+metricsAddr+"\", admin: \""+adminAddr+"\"}\n", 1)
+		"instance: demo\nlisten: {metrics: \""+metricsAddr+"\", admin: \""+adminAddr+"\", claim: \""+claimAddr+"\"}\n"+
+			"claimURL: https://"+claimAddr+"/claim\n", 1)
 	path := filepath.Join(t.TempDir(), "matchstick.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -58,6 +60,17 @@ func TestRunServesHealthMetricsAndDrain(t *testing.T) {
 	}
 	if _, body := get("http://" + metricsAddr + "/metrics"); !strings.Contains(body, `matchstick_rounds_total{pool="build",result="success"}`) {
 		t.Errorf("metrics lack rounds:\n%s", body)
+	}
+	// The claim endpoint speaks TLS on its own address; this machine name is no pool's.
+	insecure := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+	resp, err := insecure.Post("https://"+claimAddr+"/claim", "application/json",
+		strings.NewReader(`{"machine": "demo-build-0000009zzzz", "proof": {"id": "vm-1"}}`))
+	if err != nil {
+		t.Fatalf("claim: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("claim: %s", resp.Status)
 	}
 	code, stdout, stderr := call(t, "drain", "--config", path, "--pool", "build", "--json")
 	var out DrainOutput

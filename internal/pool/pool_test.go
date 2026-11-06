@@ -2,6 +2,7 @@ package pool_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -47,6 +48,7 @@ var settings = pool.Settings{
 	Limits:      plan.Limits{Maximum: 3, RegistrationTimeout: plan.Duration(10 * time.Minute)},
 	MaxLifetime: 3 * time.Hour,
 	Interval:    30 * time.Second,
+	Claim:       pool.Claim{URL: "https://matchstick.example:8443/claim", Certificate: "-----BEGIN CERTIFICATE-----\n"},
 }
 
 // world is a pool with its cloud and GitHub in memory.
@@ -154,8 +156,15 @@ func TestCreatesAMachineWithARegistrationPerJob(t *testing.T) {
 		if _, err := naming.Created("ci", "build", m.Name); err != nil {
 			t.Errorf("machine name: %v", err)
 		}
-		if got, want := w.machines.JITConfig(m.Name), "jit:"+m.Name; got != want {
-			t.Errorf("machine %s got JIT config %q, want %q", m.Name, got, want)
+		// The machine gets its bootstrap only; its configuration stays with the pool until it claims it.
+		var b pool.Bootstrap
+		raw := w.machines.Bootstrap(m.Name)
+		if err := json.Unmarshal(raw, &b); err != nil || b != (pool.Bootstrap{Machine: m.Name,
+			ClaimURL: settings.Claim.URL, ClaimCertificate: settings.Claim.Certificate}) {
+			t.Errorf("machine %s bootstrap %s (%v)", m.Name, raw, err)
+		}
+		if strings.Contains(string(raw), "jit:") {
+			t.Errorf("machine %s was given its runner configuration: %s", m.Name, raw)
 		}
 		if want := w.clock.now().Add(settings.MaxLifetime); !m.ExpiresAt.Equal(want) {
 			t.Errorf("expires %v, want %v", m.ExpiresAt, want)

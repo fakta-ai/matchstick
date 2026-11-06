@@ -8,6 +8,7 @@ import (
 
 const azure = `
 instance: ci
+claimURL: https://matchstick.runners.example:8443/claim
 github: {url: https://github.com/acme, app: {clientID: Iv1.abc, installationID: 7}}
 azure: {subscriptionID: s, resourceGroup: g, location: swedencentral, subnetID: /subnets/x}
 pools:
@@ -22,7 +23,7 @@ func TestParseAppliesDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := c.Pools[0]
-	if time.Duration(c.Interval) != DefaultInterval || c.Listen.Admin != DefaultAdmin ||
+	if time.Duration(c.Interval) != DefaultInterval || c.Listen.Admin != DefaultAdmin || c.Listen.Claim != DefaultClaim ||
 		c.GitHub.RunnerGroup != DefaultRunnerGroup || p.Labels[0] != "build" ||
 		time.Duration(p.MaxLifetime) != DefaultMaxLifetime ||
 		time.Duration(p.RegistrationTimeout) != DefaultRegistrationTimeout {
@@ -42,7 +43,10 @@ func TestParseRejects(t *testing.T) {
 		"no github":          {"github: {url: https://github.com/acme, app: {clientID: Iv1.abc, installationID: 7}}", "", "github is required"},
 		"duplicate pool": {"pools:\n", "pools:\n  - {name: build, maximum: 1, azure: {size: s, image: i}}\n",
 			"appears twice"},
-		"bad duration": {"maximum: 3", "maximum: 3\n    maxLifetime: forever", "duration"},
+		"bad duration":          {"maximum: 3", "maximum: 3\n    maxLifetime: forever", "duration"},
+		"no claimURL":           {"claimURL: https://matchstick.runners.example:8443/claim\n", "", "claimURL is required"},
+		"http claimURL":         {"claimURL: https://", "claimURL: http://", "claimURL"},
+		"claimURL with a query": {"8443/claim", "8443/claim?x=1", "claimURL"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(strings.Replace(azure, tc.from, tc.to, 1)))

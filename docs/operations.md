@@ -46,6 +46,20 @@ helm upgrade --install matchstick deploy/chart/matchstick -f values.yaml \
   --set image.digest=sha256:<digest>
 ```
 
+The chart's `values.schema.json` describes every value, `config` included: Helm refuses to install or upgrade with a
+value it doesn't know, of the wrong type, or outside its allowed values (a pool name with capitals, an
+`ephemeralOSDisk` that isn't `ResourceDisk`, `CacheDisk` or `NvmeDisk`, `azure` without `claimURL`), and names it. The
+chart sets `config.listen` itself, from `metrics.port` and `claim.port`.
+
+The claim Service is a `LoadBalancer` with the annotations in `claim.service.annotations`; the default asks Azure for
+an internal load balancer. On another cloud, give its own internal load balancer's annotations and set
+`service.beta.kubernetes.io/azure-load-balancer-internal` to `null`.
+
+| Probe | Checks | Fails when |
+|---|---|---|
+| readiness | `GET /metrics` on `metrics.port`, every 10 seconds | the process is not yet serving, or has stopped; it never depends on GitHub or the cloud, so the claim endpoint stays in service while either is down |
+| liveness | `GET /healthz` on `metrics.port`, every 30 seconds, from 30 seconds after start | four checks in a row fail: a pool has gathered no machines for three intervals plus five minutes, such as during a cloud outage. Kubernetes then restarts the process |
+
 ## Watching
 
 - `/healthz` on `listen.metrics`: 200 while every pool has gathered its machines within three intervals plus five

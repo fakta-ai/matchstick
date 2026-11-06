@@ -42,9 +42,12 @@ metrics:
 claim:
   port: 8443
   service:
-    # An internal Azure load balancer by default, so that VMs in the virtual network reach it. To give it a fixed
-    # address for claimURL, add service.beta.kubernetes.io/azure-load-balancer-ipv4: <address>.
+    # LoadBalancer, NodePort or ClusterIP.
     type: LoadBalancer
+    # The load balancer's annotations, for the cluster's cloud. The default makes an internal Azure load balancer, so
+    # that VMs in the virtual network reach it; to give it a fixed address for claimURL, add
+    # service.beta.kubernetes.io/azure-load-balancer-ipv4: <address>. On another cloud, set its internal load
+    # balancer's annotations, and the Azure one to null to drop it.
     annotations:
       service.beta.kubernetes.io/azure-load-balancer-internal: "true"
 

@@ -1,0 +1,39 @@
+# Example values for Azure, checked by CI with helm lint. The GitHub App's private key is in the Secret
+# matchstick-github, key github-app-private-key, created outside the chart.
+image:
+  digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+serviceAccount:
+  azureClientID: 00000000-0000-0000-0000-000000000000
+config:
+  instance: ci
+  claimURL: https://10.20.0.4:8443/claim
+  github:
+    url: https://github.com/acme
+    app:
+      clientID: Iv23liExample
+      installationID: 12345678
+  azure:
+    subscriptionID: 00000000-0000-0000-0000-000000000000
+    resourceGroup: github-runners
+    location: westeurope
+    subnetID: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/network/providers/Microsoft.Network/virtualNetworks/runners/subnets/runners
+  pools:
+    - name: build
+      labels: [linux-x64-large]
+      maximum: 3
+      maxLifetime: 3h
+      azure:
+        size: Standard_D16ads_v5
+        image: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/images/providers/Microsoft.Compute/galleries/runners/images/runner/versions/1.0.0
+        ephemeralOSDisk: ResourceDisk
+    - name: untrusted
+      maximum: 4
+      spares: 1
+      azure:
+        size: Standard_D2ads_v5
+        image: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/images/providers/Microsoft.Compute/galleries/runners/images/runner/versions/1.0.0
+        spot: true
+claim:
+  service:
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-ipv4: 10.20.0.4

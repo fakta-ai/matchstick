@@ -2,6 +2,8 @@ image:
   repository: ghcr.io/fakta-ai/matchstick
   # Defaults to the chart's appVersion.
   tag: ""
+  # sha256:..., which pins the image exactly; when set, tag is ignored.
+  digest: ""
   pullPolicy: IfNotPresent
 
 # matchstick's configuration file (docs/configuration.md), without secrets. listen addresses are set by the chart.

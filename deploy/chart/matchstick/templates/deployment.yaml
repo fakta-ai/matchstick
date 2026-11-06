@@ -33,7 +33,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: matchstick
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.image.repository }}{{ with .Values.image.digest }}@{{ . }}{{ else }}:{{ .Values.image.tag | default .Chart.AppVersion }}{{ end }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args: ["run", "--config", "/etc/matchstick/matchstick.yaml"]
           ports:

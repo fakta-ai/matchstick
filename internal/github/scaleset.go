@@ -30,6 +30,8 @@ type Client struct {
 	scaleSet *scaleset.Client
 	rest     *restClient
 	log      *slog.Logger
+	now      func() time.Time                     // the clock; time.Now outside tests
+	after    func(time.Duration) <-chan time.Time // the listener's backoff timer; time.After outside tests
 }
 
 // NewClient signs in to GitHub. version is reported to GitHub as the client's version.
@@ -57,7 +59,7 @@ func NewClient(url string, c Credentials, version string, log *slog.Logger) (*Cl
 	if err != nil {
 		return nil, err
 	}
-	return &Client{url: url, scaleSet: client, rest: rest, log: log}, nil
+	return &Client{url: url, scaleSet: client, rest: rest, log: log, now: time.Now, after: time.After}, nil
 }
 
 // ScaleSet is one pool's runner scale set.
@@ -213,19 +215,19 @@ func (s *ScaleSet) Listen(ctx context.Context, maxRunners int, sink Sink) {
 	}
 	backoff := 5 * time.Second
 	for ctx.Err() == nil {
-		started := time.Now()
+		started := s.client.now()
 		err := s.listen(ctx, owner, maxRunners, sink)
 		if ctx.Err() != nil {
 			return
 		}
-		if time.Since(started) > 5*time.Minute {
+		if s.client.now().Sub(started) > 5*time.Minute {
 			backoff = 5 * time.Second
 		}
 		s.log.Warn("listener stopped; reconnecting", "error", err, "after", backoff.String())
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
+		case <-s.client.after(backoff):
 		}
 		backoff = min(2*backoff, 2*time.Minute)
 	}

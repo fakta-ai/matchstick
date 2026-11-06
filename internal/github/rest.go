@@ -24,6 +24,7 @@ type restClient struct {
 	runnersPath string // such as /orgs/acme/actions/runners
 	creds       Credentials
 	http        *http.Client
+	now         func() time.Time // the clock; time.Now outside tests
 
 	mu      sync.Mutex
 	token   string
@@ -43,7 +44,8 @@ func newRESTClient(configURL string, c Credentials) (*restClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &restClient{api: api, runnersPath: path, creds: c, http: &http.Client{Timeout: 30 * time.Second}}, nil
+	return &restClient{api: api, runnersPath: path, creds: c, http: &http.Client{Timeout: 30 * time.Second},
+		now: time.Now}, nil
 }
 
 // runnersEndpoint returns the REST API root and the runner list's path for an organisation, repository or enterprise
@@ -123,10 +125,11 @@ func (c *restClient) bearer(ctx context.Context) (string, error) {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.token != "" && time.Until(c.expires) > 5*time.Minute {
+	now := c.now()
+	if c.token != "" && c.expires.Sub(now) > 5*time.Minute {
 		return c.token, nil
 	}
-	appJWT, err := appToken(c.creds, time.Now())
+	appJWT, err := appToken(c.creds, now)
 	if err != nil {
 		return "", err
 	}

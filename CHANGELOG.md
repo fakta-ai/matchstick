@@ -5,6 +5,29 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- After publishing, the release workflow verifies the public image, chart and files: digests, signatures,
+  `checksums.txt`, provenance once the repository is public, and that the image runs and reports its version.
+
+### Changed
+
+- Releases happen when a pull request that moves `CHANGELOG.md`'s entries under a new version merges: the CI run on
+  `main` tags the commit itself once its checks pass. Nobody pushes version tags.
+- A release builds once: the image and the chart go first to `ghcr.io/fakta-ai/matchstick-staging` and
+  `ghcr.io/fakta-ai/charts-staging/matchstick`, then their exact digests, with signatures, SBOMs and attestations, are
+  copied to the public names before the GitHub release is published. When the repository variable
+  `RELEASE_E2E_CONTEXT` is set, promotion waits for that commit status to succeed (`RELEASE_E2E_TIMEOUT` minutes, 30
+  by default).
+- Signatures name the release workflow on `main`:
+  `--certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/heads/main`
+  (releases up to 0.3.1: `…/release.yml@refs/tags/v<version>`).
+
+### Removed
+
+- The flake's package and checks, and `nix/`: the flake is the dev shell only; CI and releases build with Go and
+  GoReleaser.
+
 ## [0.3.1] - 2026-11-06
 
 ### Fixed

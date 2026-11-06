@@ -3,8 +3,9 @@
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
+  # A dev shell only: CI and releases build with Go and GoReleaser (.goreleaser.yaml), not with Nix.
   outputs =
-    { self, nixpkgs }:
+    { nixpkgs, ... }:
     let
       systems = [
         "x86_64-linux"
@@ -13,20 +14,8 @@
         "aarch64-darwin"
       ];
       forAll = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
-      version = self.shortRev or self.dirtyShortRev or "dev";
     in
     {
-      packages = forAll (
-        pkgs:
-        let
-          matchstick = pkgs.callPackage ./nix/package.nix { inherit version; };
-        in
-        {
-          default = matchstick;
-          inherit matchstick;
-        }
-      );
-
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           packages = [
@@ -36,16 +25,11 @@
             pkgs.kubernetes-helm
             # verifies a release's signatures (docs/operations.md)
             pkgs.cosign
-            # the review gate's test (.github/tests/codex.sh)
+            # the workflows' tests (.github/tests)
             pkgs.jq
             pkgs.yq-go
           ];
         };
-      });
-
-      checks = forAll (pkgs: {
-        # building the package runs go test ./... -short
-        matchstick = self.packages.${pkgs.stdenv.hostPlatform.system}.matchstick;
       });
     };
 }

@@ -13,22 +13,26 @@ Each release publishes:
 `matchstick-adapter` is in the archives only, not in the image.
 
 The release notes give the image's and the chart's digests. The image, the chart and `checksums.txt` are signed with
-Sigstore, keyless: the signing certificate names the release workflow at the version's tag. Check them before you use
-them:
+Sigstore, keyless: the signing certificate names the release workflow on `main`,
+`https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/heads/main`, and records the commit it
+built. Releases up to 0.3.1 were signed by the workflow at the version's tag instead,
+`…/release.yml@refs/tags/v<version>`. Check them before you use them:
 
 ```sh
+identity=https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/heads/main
 cosign verify ghcr.io/fakta-ai/matchstick@sha256:<digest> \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v<version>
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$identity"
 cosign verify ghcr.io/fakta-ai/charts/matchstick@sha256:<digest> \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v<version>
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$identity"
 # the downloaded archives, through checksums.txt
 cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v<version>
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$identity"
 sha256sum --check --ignore-missing checksums.txt
 ```
+
+Each release's image and chart are built once, into `ghcr.io/fakta-ai/matchstick-staging` and
+`ghcr.io/fakta-ai/charts-staging/matchstick`, and copied from there by digest, with their signatures, SBOMs and
+attestations: the public names hold exactly the bytes that were staged and checked. Use the public names.
 
 A release published from the public repository also has GitHub's build provenance attestations (SLSA provenance) for
 its archives, `checksums.txt`, the image and the chart, naming the commit and the workflow run that built them:

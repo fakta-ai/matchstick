@@ -322,18 +322,18 @@ A failed check says what to change, and the command exits with 1. It changes not
 
 ## 6. Install
 
-Each release signs its chart and image with Sigstore; the release notes give their digests. Pull the chart, check that
-its digest is the release's and that the release workflow signed it, then install that file:
+Each release signs its chart and image with Sigstore, keyless, by the release workflow on `main`; the release notes
+give their digests. Pull the chart, check that its digest is the release's and that the release workflow signed it,
+then install that file (releases up to 0.3.1 name `release.yml@refs/tags/v$version` instead):
 
 ```sh
 version=<version>
+identity=https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/heads/main
 helm pull oci://ghcr.io/fakta-ai/charts/matchstick --version $version   # prints the chart's Digest
 cosign verify ghcr.io/fakta-ai/charts/matchstick@sha256:<chart digest> \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v$version
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$identity"
 cosign verify ghcr.io/fakta-ai/matchstick@sha256:<image digest> \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v$version
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity "$identity"
 # with the GitHub CLI, where the release has build provenance attestations (operations.md#installing)
 gh attestation verify oci://ghcr.io/fakta-ai/charts/matchstick@sha256:<chart digest> --repo fakta-ai/matchstick
 gh attestation verify oci://ghcr.io/fakta-ai/matchstick@sha256:<image digest> --repo fakta-ai/matchstick

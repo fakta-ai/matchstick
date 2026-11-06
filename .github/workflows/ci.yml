@@ -1,47 +1,179 @@
-# The checks every pull request and every commit on main passes. The release workflow runs them too, on the tagged
-# commit, before it publishes anything.
+# The checks every pull request and every commit on main passes, as parallel jobs; `check` passes only when each job
+# this run needs passed and every other one was skipped. A pull request builds the Nix package only when the files it
+# is built from change, and runs a GoReleaser snapshot only when the release's configuration changes; every commit on
+# main builds the Nix package. A version tag publishes only after this workflow's run for the tagged commit on main
+# passed (release.yml).
+# Go's module and build caches: GitHub scopes them by branch, so a pull request reads main's and writes only its own;
+# runs on main write main's, which the release reads.
 name: ci
 on:
   pull_request:
   push:
     branches: [main]
-  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # a pull request's newer commit replaces its older run; each commit on main keeps its own run, which a release waits for
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
-  check:
-    runs-on: ubuntu-latest
+  # which of the jobs that depend on the files changed a pull request needs
+  changes:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      nix: ${{ steps.files.outputs.nix }}
+      release: ${{ steps.files.outputs.release }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          # every path the pull request changes, a rename's old path too; a failed call fails the step
+          files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | .filename, (.previous_filename // empty)')
+          nix=false release=false
+          while IFS= read -r file; do
+            case $file in
+              flake.nix | flake.lock | nix/* | go.mod | go.sum) nix=true ;;
+              .goreleaser.yaml | .github/workflows/release.yml) release=true ;;
+            esac
+          done <<< "$files"
+          echo "nix: $nix, release: $release"
+          printf 'nix=%s\nrelease=%s\n' "$nix" "$release" >> "$GITHUB_OUTPUT"
+
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test -race ./...
+      - name: lint
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.15.0
+      - name: vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  chart:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - name: lint and render
+        run: |
+          set -euo pipefail
+          for values in deploy/chart/matchstick/values.yaml deploy/chart/matchstick/ci/azure-values.yaml; do
+            helm lint deploy/chart/matchstick --values "$values"
+            helm template matchstick deploy/chart/matchstick --values "$values" > /dev/null
+          done
+
+  # the review gate's one exception, Dependabot's flake.lock-only pull requests, against fixture pull requests
+  codex:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # the runner has bash, jq and yq
+      - run: bash .github/tests/codex.sh
+
+  # the Nix package: both executables, the tests, vendorHash
+  nix:
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name == 'push' || needs.changes.outputs.nix == 'true') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - run: nix build .#matchstick
+
+  # what a release would publish, built without publishing: archives, checksums, SBOMs, and the image loaded into the
+  # runner's Docker (linux/amd64)
+  snapshot:
+    needs: changes
+    if: needs.changes.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: go-${{ hashFiles('go.sum') }}
-          restore-keys: go-
-      # the review gate's one exception, Dependabot's flake.lock-only pull requests, against fixture pull requests
-      - name: codex gate
-        run: nix develop -c bash .github/tests/codex.sh
-      # The flake's dev shell has the Go toolchain, golangci-lint and govulncheck.
-      - name: vet
-        run: nix develop -c go vet ./...
-      - name: test
-        run: nix develop -c go test -race ./...
-      - name: lint
-        run: nix develop -c golangci-lint run ./...
-      - name: vulnerabilities
-        run: nix develop -c govulncheck ./...
-      - name: chart
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.55.0
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.19.0
+          args: release --snapshot --clean --skip=sign
+      - name: the image runs
         run: |
-          nix develop -c helm lint deploy/chart/matchstick
-          nix develop -c helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
-      - name: build
-        run: nix build .#matchstick .#image
+          set -euo pipefail
+          image=$(jq -r '.[] | select(.type == "Docker Manifest") | .name' dist/artifacts.json)
+          docker run --rm "$image" --version
+
+  check:
+    if: always()
+    needs: [changes, go, chart, codex, nix, snapshot]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+          EVENT: ${{ github.event_name }}
+          NIX: ${{ needs.changes.outputs.nix }}
+          RELEASE: ${{ needs.changes.outputs.release }}
+        run: |
+          set -euo pipefail
+          # the jobs this run needs; every other one must have been skipped
+          want="go chart codex"
+          if [ "$EVENT" = pull_request ]; then
+            want+=" changes"
+            if [ "$NIX" = true ]; then want+=" nix"; fi
+            if [ "$RELEASE" = true ]; then want+=" snapshot"; fi
+          else
+            want+=" nix"
+          fi
+          failed=0
+          for job in $(jq -r 'keys[]' <<< "$NEEDS"); do
+            result=$(jq -r --arg job "$job" '.[$job].result' <<< "$NEEDS")
+            case " $want " in
+              *" $job "*) expected=success ;;
+              *) expected=skipped ;;
+            esac
+            if [ "$result" = "$expected" ]; then
+              echo "$job: $result"
+            else
+              echo "::error::$job: $result, expected $expected"
+              failed=1
+            fi
+          done
+          exit "$failed"

@@ -54,12 +54,13 @@ func Tools(ctx context.Context, run Exec) ([]op.Tool, error) {
 	return out.Tools, nil
 }
 
-// Call runs one operation with params as its input and returns its output.
+// Call runs one operation, named by its tool name, with params as its input and returns its output.
 func Call(ctx context.Context, run Exec, name string, params json.RawMessage) (json.RawMessage, *op.Error) {
 	if len(bytes.TrimSpace(params)) == 0 || string(bytes.TrimSpace(params)) == "null" {
 		params = json.RawMessage("{}")
 	}
-	stdout, stderr, code, err := run(ctx, []string{name, "--json", "--input", "-"}, params)
+	args := append(op.Words(name), "--json", "--input", "-")
+	stdout, stderr, code, err := run(ctx, args, params)
 	if err != nil {
 		return nil, op.Errorf(op.CodeInternal, "running matchstick: %v", err)
 	}

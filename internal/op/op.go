@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -22,8 +23,16 @@ const (
 	CodeInvalidInput  = "invalid_input"
 	CodeInvalidConfig = "invalid_configuration"
 	CodeUnavailable   = "unavailable"
-	CodeInternal      = "internal"
+	// CodeCheckFailed is a check that ran and found a problem; its report is the output.
+	CodeCheckFailed = "check_failed"
+	CodeInternal    = "internal"
 )
+
+// Failer is an output that can report a failure while still being the operation's result, such as a check's report
+// listing what failed. Call returns both the output and the failure.
+type Failer interface {
+	Failure() error
+}
 
 // Error is an operation's failure, as callers see it.
 type Error struct {
@@ -108,7 +117,7 @@ func Define[In, Out any](name, description, example string, a Annotations,
 }
 
 // Call checks the input against the input schema, runs the operation, and checks its output against the output
-// schema. Errors are *Error.
+// schema. Errors are *Error. An output that is a Failer reporting a failure is returned with that failure.
 func (o *Operation) Call(ctx context.Context, input []byte) (json.RawMessage, error) {
 	if len(bytes.TrimSpace(input)) == 0 {
 		input = []byte("{}")
@@ -135,6 +144,11 @@ func (o *Operation) Call(ctx context.Context, input []byte) (json.RawMessage, er
 	if err := o.output.Validate(result); err != nil {
 		return nil, Errorf(CodeInternal, "%s: output does not match its schema: %v", o.Name, err)
 	}
+	if f, ok := out.(Failer); ok {
+		if err := f.Failure(); err != nil {
+			return b, AsError(err)
+		}
+	}
 	return b, nil
 }
 
@@ -147,8 +161,15 @@ type Tool struct {
 	Annotations  Annotations        `json:"annotations"`
 }
 
-// Tool returns the operation's MCP tool definition.
+// Tool returns the operation's MCP tool definition. An operation named by several words, such as "github-app check",
+// is the tool "github-app_check", since tool names have no spaces.
 func (o *Operation) Tool() Tool {
-	return Tool{Name: o.Name, Description: o.Description, InputSchema: o.Input, OutputSchema: o.Output,
+	return Tool{Name: ToolName(o.Name), Description: o.Description, InputSchema: o.Input, OutputSchema: o.Output,
 		Annotations: o.Annotations}
 }
+
+// ToolName returns the tool name of the operation with the given name.
+func ToolName(operation string) string { return strings.ReplaceAll(operation, " ", "_") }
+
+// Words returns the command-line words of a tool: "github-app_check" is "github-app check".
+func Words(tool string) []string { return strings.Split(tool, "_") }

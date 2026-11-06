@@ -68,37 +68,72 @@ func (a *App) Main(ctx context.Context, args []string) int {
 			return c.Run(ctx, args[1:])
 		}
 	}
-	for _, o := range a.Operations {
-		if o.Name == args[0] {
-			switch {
-			case help && jsonOut:
-				return a.printTools([]*op.Operation{o})
-			case help:
-				a.operationUsage(o)
-				return ExitOK
-			}
-			return a.call(ctx, o, args[1:], jsonOut)
+	if o, rest := a.find(args); o != nil {
+		switch {
+		case help && jsonOut:
+			return a.printTools([]*op.Operation{o})
+		case help:
+			a.operationUsage(o)
+			return ExitOK
 		}
+		return a.call(ctx, o, rest, jsonOut)
+	}
+	if group := a.group(args[0]); len(group) > 0 {
+		if help {
+			a.list(a.Stdout, nil, group)
+			return ExitOK
+		}
+		names := make([]string, 0, len(group))
+		for _, o := range group {
+			names = append(names, "'"+a.Name+" "+o.Name+"'")
+		}
+		return a.fail(jsonOut, op.Errorf(op.CodeInvalidInput, "%q needs a command: %s", args[0],
+			strings.Join(names, ", ")))
 	}
 	return a.fail(jsonOut, op.Errorf(op.CodeInvalidInput, "unknown command %q; run '%s --help'", args[0], a.Name))
 }
 
+// find returns the operation whose name's words start args, and the arguments after them.
+func (a *App) find(args []string) (*op.Operation, []string) {
+	for _, o := range a.Operations {
+		words := strings.Fields(o.Name)
+		if len(args) >= len(words) && slices.Equal(args[:len(words)], words) {
+			return o, args[len(words):]
+		}
+	}
+	return nil, nil
+}
+
+// group returns the operations named by several words whose first word is word, such as "github-app".
+func (a *App) group(word string) []*op.Operation {
+	var out []*op.Operation
+	for _, o := range a.Operations {
+		if words := strings.Fields(o.Name); len(words) > 1 && words[0] == word {
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// call runs an operation. An output that reports a failure is printed before the error.
 func (a *App) call(ctx context.Context, o *op.Operation, args []string, jsonOut bool) int {
 	input, err := a.input(o, args)
 	if err != nil {
 		return a.fail(jsonOut, err)
 	}
 	out, err := o.Call(ctx, input)
+	if out != nil {
+		if !jsonOut {
+			var indented bytes.Buffer
+			if json.Indent(&indented, out, "", "  ") == nil {
+				out = indented.Bytes()
+			}
+		}
+		fmt.Fprintf(a.Stdout, "%s\n", out)
+	}
 	if err != nil {
 		return a.fail(jsonOut, err)
 	}
-	if !jsonOut {
-		var indented bytes.Buffer
-		if json.Indent(&indented, out, "", "  ") == nil {
-			out = indented.Bytes()
-		}
-	}
-	fmt.Fprintf(a.Stdout, "%s\n", out)
 	return ExitOK
 }
 
@@ -231,27 +266,36 @@ func (a *App) printTools(ops []*op.Operation) int {
 }
 
 func (a *App) usage(w io.Writer) {
-	fmt.Fprintf(w, "%s: %s\n\nUsage:\n  %s <command> [flags]\n\nCommands:\n", a.Name, a.Summary, a.Name)
-	for _, c := range a.Commands {
-		fmt.Fprintf(w, "  %-8s %s\n", c.Name, c.Summary)
-	}
-	for _, o := range a.Operations {
-		fmt.Fprintf(w, "  %-8s %s\n", o.Name, firstSentence(o.Description))
-	}
+	fmt.Fprintf(w, "%s: %s\n\nUsage:\n  %s <command> [flags]\n\n", a.Name, a.Summary, a.Name)
+	a.list(w, a.Commands, a.Operations)
 	fmt.Fprintf(w, "\nFlags:\n  -h, --help     help; with --json, the operations as MCP tool definitions\n"+
 		"  --version      print the version\n\nExample:\n  %s\n\nRun '%s <command> --help' for a command's flags.\n",
 		a.Operations[0].Example, a.Name)
 }
 
+// list prints the commands and operations, one a line with its summary.
+func (a *App) list(w io.Writer, commands []Command, ops []*op.Operation) {
+	width := 0
+	for _, c := range commands {
+		width = max(width, len(c.Name))
+	}
+	for _, o := range ops {
+		width = max(width, len(o.Name))
+	}
+	fmt.Fprintln(w, "Commands:")
+	for _, c := range commands {
+		fmt.Fprintf(w, "  %-*s  %s\n", width, c.Name, c.Summary)
+	}
+	for _, o := range ops {
+		fmt.Fprintf(w, "  %-*s  %s\n", width, o.Name, firstSentence(o.Description))
+	}
+}
+
 func (a *App) operationUsage(o *op.Operation) {
 	w := a.Stdout
-	fmt.Fprintf(w, "%s\n\nUsage:\n  %s %s [flags]\n\nFlags:\n", o.Description, a.Name, o.Name)
-	names := make([]string, 0, len(o.Input.Properties))
-	for name := range o.Input.Properties {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	for _, name := range names {
+	fmt.Fprintf(w, "%s\n\nUsage:\n  %s %s [flags]\n\nInput flags (or --input with a JSON object of these fields):\n",
+		o.Description, a.Name, o.Name)
+	for _, name := range sortedKeys(o.Input.Properties) {
 		s := o.Input.Properties[name]
 		required := ""
 		if slices.Contains(o.Input.Required, name) {
@@ -263,7 +307,23 @@ func (a *App) operationUsage(o *op.Operation) {
 		"the whole input as a JSON object; flags override its fields",
 		"json", "print the result as one JSON value; errors as JSON on stderr",
 		"no-input", "never prompt (nothing prompts; accepted for scripts)")
+	if o.Output != nil && len(o.Output.Properties) > 0 {
+		fmt.Fprintf(w, "\nOutput (a JSON object on stdout; '%s %s --help --json' gives its schema):\n", a.Name, o.Name)
+		for _, name := range sortedKeys(o.Output.Properties) {
+			s := o.Output.Properties[name]
+			fmt.Fprintf(w, "  %-24s %s\n", name+" ("+schemaType(s)+")", s.Description)
+		}
+	}
 	fmt.Fprintf(w, "\nExample:\n  %s\n", o.Example)
+}
+
+func sortedKeys[V any](m map[string]V) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	return keys
 }
 
 func valueName(typ string) string {

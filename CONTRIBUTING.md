@@ -12,9 +12,8 @@ Thank you for helping.
 
 ## Setting up
 
-With [Nix](https://nixos.org/), `nix develop` gives a shell with Go, golangci-lint, govulncheck, Helm and cosign, and
-`nix build` builds both executables and runs the tests. Without Nix, you need Go (the version in `go.mod`) and
-[golangci-lint](https://golangci-lint.run/) v2.
+With [Nix](https://nixos.org/), `nix develop` gives a shell with Go, golangci-lint, govulncheck, Helm, cosign, jq and
+yq. Without Nix, you need Go (the version in `go.mod`) and [golangci-lint](https://golangci-lint.run/) v2.
 
 ```sh
 go vet ./...
@@ -23,17 +22,17 @@ golangci-lint run ./...
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 helm lint deploy/chart/matchstick
 helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
-nix build .#matchstick
+bash .github/tests/codex.sh
+bash .github/tests/release.sh
 # what a release builds, published nowhere; needs syft (https://github.com/anchore/syft), and Docker for the image
 go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean --skip=sign
 ```
 
 CI runs these on every pull request as parallel jobs: the Go checks only when Go files, `cmd/`, `internal/`,
-`examples/`, `go.mod`, `go.sum`, `.golangci.yml` or the CI workflow change, `nix build` only when `flake.nix`,
-`flake.lock`, `nix/`, `go.mod` or `go.sum` change (both on every commit on `main`), the GoReleaser snapshot only when
-`.goreleaser.yaml` or the release workflow change. When `go.sum` changes, update `vendorHash` in `nix/package.nix`
-(`nix build` prints the right one). Nothing needs a cloud account or a GitHub App: the tests use in-memory fakes, and
-`matchstick plan --config examples/fake.yaml` runs the planner against a fake pool.
+`examples/`, `go.mod`, `go.sum`, `.golangci.yml` or the CI workflow change (and on every commit on `main`), the
+GoReleaser snapshot only when `.goreleaser.yaml` or the release workflow change. Nothing needs a cloud account or a
+GitHub App: the tests use in-memory fakes, and `matchstick plan --config examples/fake.yaml` runs the planner against
+a fake pool.
 
 ## How the code is organised
 
@@ -62,6 +61,30 @@ fails without it.
   threads are resolved.
 - Dependabot opens weekly pull requests moving `flake.lock`'s inputs, the Go modules and the workflows' actions, each
   to a release or commit at least 14 days old. One that changes only `flake.lock` needs no review and merges by itself
-  once CI passes; one for the Go modules needs `vendorHash` updated before CI passes.
+  once CI passes.
+
+## Releases
+
+A release is a pull request that moves the `Unreleased` entries of `CHANGELOG.md` under a new version heading,
+`## [x.y.z] - YYYY-MM-DD`, above the previous one. Nobody pushes tags. When it merges and CI passes on `main`, the
+same CI run (`.github/workflows/release.yml`):
+
+1. tags the commit `vx.y.z`, if that version has no tag yet;
+2. builds everything once (`.goreleaser.yaml`): the binaries, their SBOMs and the signed `checksums.txt` into a draft
+   release, and the image and the chart into staging repositories only, `ghcr.io/fakta-ai/matchstick-staging` and
+   `ghcr.io/fakta-ai/charts-staging/matchstick`, each tagged with the version, signed, with SBOMs, and with build
+   provenance once the repository is public;
+3. when the repository variable `RELEASE_E2E_CONTEXT` is set, waits for the commit status with that context on the
+   release's commit to be `success`, for at most `RELEASE_E2E_TIMEOUT` minutes (30 by default). An end-to-end system
+   runs a real job with the staged image and chart (their digests are in the run's summary) and sets that status.
+   A failure or timeout ends the run, with the draft and the staged images left as they are;
+4. copies the staged image and chart, by digest, with their signatures, SBOMs and attestations, to
+   `ghcr.io/fakta-ai/matchstick:<version>` and `ghcr.io/fakta-ai/charts/matchstick:<version>`;
+5. publishes the draft release;
+6. verifies, from the public names, the signatures, the digests, the files against `checksums.txt`, the provenance
+   once public, and that the image runs and reports the version. A failed check fails the run; nothing is undone.
+
+A version whose run failed after tagging is not built again by later commits: the next release takes the next
+version. Re-running the failed jobs of that run continues it.
 
 By contributing you agree that your contribution is licensed under the [MIT License](LICENSE).

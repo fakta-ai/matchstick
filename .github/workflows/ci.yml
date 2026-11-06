@@ -1,9 +1,8 @@
 # The checks every pull request and every commit on main passes, as parallel jobs; `check` passes only when each job
 # this run needs passed and every other one was skipped. A pull request runs the Go checks only when what Go builds or
-# tests changes, builds the Nix package only when the files it is built from change, and runs a GoReleaser snapshot
-# only when the release's configuration changes; every commit on main runs the Go checks, builds the Nix package and
-# builds every release target. A version tag publishes only after this workflow's run for the tagged commit on main
-# passed (release.yml).
+# tests changes, and a GoReleaser snapshot only when the release's configuration changes; every commit on main runs
+# the Go checks and builds every release target. On main, once `check` passed, the same run releases the version
+# CHANGELOG.md names if it isn't released yet (release.yml).
 # Caches: GitHub scopes them by branch, so a pull request reads main's and writes only its own; runs on main write
 # main's, which the release reads. The `go` job keeps setup-go's (linux/amd64 and race builds); `release-build` keeps
 # its own key with every release target's build cache, which the snapshot and the release only restore.
@@ -15,7 +14,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  # a pull request's newer commit replaces its older run; each commit on main keeps its own run, which a release waits for
+  # a pull request's newer commit replaces its older run; each commit on main keeps its own run, with its release
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
@@ -28,7 +27,6 @@ jobs:
       pull-requests: read
     outputs:
       go: ${{ steps.files.outputs.go }}
-      nix: ${{ steps.files.outputs.nix }}
       release: ${{ steps.files.outputs.release }}
     steps:
       - id: files
@@ -40,7 +38,7 @@ jobs:
           set -euo pipefail
           # every path the pull request changes, a rename's old path too; a failed call fails the step
           files=$(gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[] | .filename, (.previous_filename // empty)')
-          go=false nix=false release=false
+          go=false release=false
           while IFS= read -r file; do
             # what Go builds or tests: Go files, embedded files and test fixtures, the examples the tests run, the
             # modules, the linter's configuration, this workflow
@@ -48,12 +46,11 @@ jobs:
               *.go | cmd/* | internal/* | examples/* | go.mod | go.sum | .golangci.yml | .github/workflows/ci.yml) go=true ;;
             esac
             case $file in
-              flake.nix | flake.lock | nix/* | go.mod | go.sum) nix=true ;;
               .goreleaser.yaml | .github/workflows/release.yml) release=true ;;
             esac
           done <<< "$files"
-          echo "go: $go, nix: $nix, release: $release"
-          printf 'go=%s\nnix=%s\nrelease=%s\n' "$go" "$nix" "$release" >> "$GITHUB_OUTPUT"
+          echo "go: $go, release: $release"
+          printf 'go=%s\nrelease=%s\n' "$go" "$release" >> "$GITHUB_OUTPUT"
 
   go:
     needs: changes
@@ -97,8 +94,9 @@ jobs:
             helm template matchstick deploy/chart/matchstick --values "$values" > /dev/null
           done
 
-  # the review gate's one exception, Dependabot's flake.lock-only pull requests, against fixture pull requests
-  codex:
+  # the workflows' own decisions, against fixtures: the review gate's one exception (Dependabot's flake.lock-only pull
+  # requests) and the release's (which version, the tag, the end-to-end wait)
+  workflows:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -107,19 +105,7 @@ jobs:
           persist-credentials: false
       # the runner has bash, jq and yq
       - run: bash .github/tests/codex.sh
-
-  # the Nix package: both executables, the tests, vendorHash
-  nix:
-    needs: changes
-    if: ${{ !cancelled() && (github.event_name == 'push' || needs.changes.outputs.nix == 'true') }}
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: cachix/install-nix-action@75c75c31ebece974e48ebc36b4ad125bd97bd97b # v31.11.3
-      - run: nix build .#matchstick
+      - run: bash .github/tests/release.sh
 
   # every release target built as the release builds it, published nowhere; its Go caches, under a key of their own,
   # are what the snapshot and the release restore. The key changes with the modules, the Go version and the release's
@@ -207,7 +193,7 @@ jobs:
 
   check:
     if: always()
-    needs: [changes, go, chart, codex, nix, release-build, snapshot]
+    needs: [changes, go, chart, workflows, release-build, snapshot]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -215,19 +201,17 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           EVENT: ${{ github.event_name }}
           GO: ${{ needs.changes.outputs.go }}
-          NIX: ${{ needs.changes.outputs.nix }}
           RELEASE: ${{ needs.changes.outputs.release }}
         run: |
           set -euo pipefail
           # the jobs this run needs; every other one must have been skipped
-          want="chart codex"
+          want="chart workflows"
           if [ "$EVENT" = pull_request ]; then
             want+=" changes"
             if [ "$GO" = true ]; then want+=" go"; fi
-            if [ "$NIX" = true ]; then want+=" nix"; fi
             if [ "$RELEASE" = true ]; then want+=" snapshot"; fi
           else
-            want+=" go nix release-build"
+            want+=" go release-build"
           fi
           failed=0
           for job in $(jq -r 'keys[]' <<< "$NEEDS"); do
@@ -244,3 +228,16 @@ jobs:
             fi
           done
           exit "$failed"
+
+  # the version CHANGELOG.md names, released if it isn't yet; the permissions are the most any of its jobs takes, and
+  # each job takes only its own
+  release:
+    needs: check
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+      statuses: read
+    uses: ./.github/workflows/release.yml

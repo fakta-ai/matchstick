@@ -13,22 +13,21 @@ golangci-lint run ./...        # configuration in .golangci.yml
 govulncheck ./...
 helm lint deploy/chart/matchstick
 helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
-nix build .#matchstick         # both executables; runs the tests; checks vendorHash
 bash .github/tests/codex.sh    # the review gate: Dependabot's flake.lock-only pull requests pass without a review
+bash .github/tests/release.sh  # the release's decisions: which version, the tag, the end-to-end wait
 # what a release builds, published nowhere (needs syft, and Docker for the image)
 go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean --skip=sign
 ```
 
-CI (`.github/workflows/ci.yml`) runs these as parallel jobs with Go's caches: Go (vet, race tests, golangci-lint,
-govulncheck), the chart (lint and render, default and example values), the review gate's test, and `nix build`. A
-pull request runs the Go job only when Go files, `cmd/`, `internal/`, `examples/`, `go.mod`, `go.sum`,
-`.golangci.yml` or `ci.yml` change; `nix build` only when `flake.nix`, `flake.lock`, `nix/`, `go.mod` or `go.sum`
-change; and the GoReleaser snapshot only when `.goreleaser.yaml` or the release workflow change. Every commit on `main`
-runs the Go job and `nix build`, and builds every release target to keep the cache the release restores
-(`release-build`). Job `check` passes only when every job the run needs passed. `main` accepts changes only through
-pull requests whose `check` passed. A change to `go.sum` updates `vendorHash` in `nix/package.nix`. Dependabot opens
-weekly pull requests for `flake.lock`, the Go modules and the workflows' actions (`.github/dependabot.yml`); one that
-changes only `flake.lock` merges by itself once `check` passes.
+The flake is the dev shell only; nothing builds with Nix. CI (`.github/workflows/ci.yml`) runs these as parallel jobs
+with Go's caches: Go (vet, race tests, golangci-lint, govulncheck), the chart (lint and render, default and example
+values) and the workflows' tests. A pull request runs the Go job only when Go files, `cmd/`, `internal/`,
+`examples/`, `go.mod`, `go.sum`, `.golangci.yml` or `ci.yml` change, and the GoReleaser snapshot only when
+`.goreleaser.yaml` or the release workflow change. Every commit on `main` runs the Go job and builds every release
+target to keep the cache the release restores (`release-build`). Job `check` passes only when every job the run
+needs passed. `main` accepts changes only through pull requests whose `check` passed. Dependabot opens weekly pull
+requests for `flake.lock`, the Go modules and the workflows' actions (`.github/dependabot.yml`); one that changes
+only `flake.lock` merges by itself once `check` passes.
 
 ## Design rules
 
@@ -72,9 +71,11 @@ changes only `flake.lock` merges by itself once `check` passes.
   `refactor:`, `ci:`.
 - Branches `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `docs/<slug>`; merged with a merge commit.
 - One concern per pull request, small enough to review.
-- Releases are cut by pushing a `vX.Y.Z` tag on a commit of `main`; `CHANGELOG.md` gets the version's section first.
-  The release workflow (`.github/workflows/release.yml`) waits for `ci.yml`'s run for that commit on `main` and
-  refuses the tag if it failed or never ran; then GoReleaser (`.goreleaser.yaml`) publishes the binaries, SBOMs,
-  signed checksums and the ko-built image, a parallel job publishes the chart, and the draft release is published
-  once both are. Signatures are Sigstore's, keyless; build provenance attestations are added once the repository is
-  public. The image's base is pinned by digest in `.goreleaser.yaml` and moved by hand.
+- A release is a pull request that moves `CHANGELOG.md`'s `Unreleased` entries under a new `## [x.y.z] - YYYY-MM-DD`
+  heading. Nobody tags: once it merges and `check` passes, the same CI run (`.github/workflows/release.yml`) tags the
+  commit `vx.y.z`, builds everything once with GoReleaser (`.goreleaser.yaml`) into a draft release and staging
+  registries (`ghcr.io/fakta-ai/matchstick-staging`, `ghcr.io/fakta-ai/charts-staging/matchstick`), signed and with
+  SBOMs, waits for the end-to-end status when `RELEASE_E2E_CONTEXT` is set, copies the staged digests to the public
+  names, publishes the draft, and verifies what it published. Signatures are Sigstore's, keyless, by
+  `release.yml@refs/heads/main`; build provenance attestations are added once the repository is public. The image's
+  base is pinned by digest in `.goreleaser.yaml` and moved by hand.

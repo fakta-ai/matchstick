@@ -56,8 +56,7 @@ matchstick plan --config examples/fake.yaml
 ## Building
 
 ```sh
-nix build                 # matchstick and matchstick-adapter in ./result/bin
-go build ./cmd/...        # with Go 1.27.3 or later
+go build -o bin/ ./cmd/...   # matchstick and matchstick-adapter in ./bin, with Go 1.27.3 or later
 ```
 
 ## Documentation

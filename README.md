@@ -64,6 +64,7 @@ go build ./cmd/...        # with Go 1.27.3 or later
 - [Configuration](docs/configuration.md)
 - [Operations](docs/operations.md): running, watching, draining
 - [The image contract](docs/image-contract.md)
+- [Threat model](docs/threat-model.md): what matchstick protects, whom it trusts, what is left to you
 - [Architecture](docs/architecture.md), for contributors
 
 ## License

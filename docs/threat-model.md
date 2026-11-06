@@ -72,8 +72,9 @@ flowchart LR
   network interfaces; outside it, only join the runners' subnet, read the runner image and assign each pool's
   identity ([configuration.md](configuration.md#azure)).
 - **A GitHub App with the least permission:** Self-hosted runners read and write on an organisation (Administration on
-  a repository), installed only where it is used. Limit which repositories may use the runner group, and don't let
-  pull requests from forks run on these runners.
+  a repository), Metadata read, nothing else, installed only where it is used; `matchstick github-app create` makes
+  such an App and `matchstick github-app check` checks it. Limit which repositories may use the runner group, and
+  don't let pull requests from forks run on these runners.
 - **Pool bounds and a budget:** set each pool's `maximum` and `maxLifetime` to what you are willing to pay, and set a
   budget alert on the runners' resource group. Watch `matchstick_last_success_timestamp_seconds`
   ([operations.md](operations.md#watching)): finished VMs keep billing while matchstick is stopped.

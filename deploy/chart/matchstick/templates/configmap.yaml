@@ -8,3 +8,6 @@ data:
   matchstick.yaml: |
     {{- $listen := dict "listen" (dict "metrics" (printf ":%d" (int .Values.metrics.port)) "admin" "127.0.0.1:9091" "claim" (printf ":%d" (int .Values.claim.port))) }}
     {{- toYaml (merge $listen (omit .Values.config "listen")) | nindent 4 }}
+  {{- range $name, $content := .Values.files }}
+  {{ $name }}: {{ $content | quote }}
+  {{- end }}

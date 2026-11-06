@@ -71,7 +71,7 @@ type PoolStatus struct {
 }
 
 func operations() []*op.Operation {
-	return []*op.Operation{
+	return append([]*op.Operation{
 		op.Define("decide",
 			"Decide what a pool should do, from an observation and the pool's limits. Pure: reads nothing, changes nothing.",
 			"matchstick decide --input observation.json --json",
@@ -94,7 +94,7 @@ func operations() []*op.Operation {
 			"matchstick drain --pool build",
 			op.Annotations{Destructive: true, Idempotent: true, OpenWorld: true},
 			drainPool),
-	}
+	}, githubAppOperations()...)
 }
 
 // observe builds the selected pools from the configuration and gathers each once.

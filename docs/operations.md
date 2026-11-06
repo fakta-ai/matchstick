@@ -51,6 +51,14 @@ value it doesn't know, of the wrong type, or outside its allowed values (a pool 
 `ephemeralOSDisk` that isn't `ResourceDisk`, `CacheDisk` or `NvmeDisk`, `azure` without `claimURL`), and names it. The
 chart sets `config.listen` itself, from `metrics.port` and `claim.port`.
 
+Files the configuration names, such as a pool's `azure.customData`, go in `files`, one entry per file, and are mounted
+beside it at `/etc/matchstick/<name>`:
+
+```sh
+helm upgrade --install matchstick deploy/chart/matchstick -f values.yaml \
+  --set-file 'files.cloud-init\.yaml=cloud-init.yaml'   # and in values.yaml: customData: /etc/matchstick/cloud-init.yaml
+```
+
 The claim Service is a `LoadBalancer` with the annotations in `claim.service.annotations`; the default asks Azure for
 an internal load balancer. On another cloud, give its own internal load balancer's annotations and set
 `service.beta.kubernetes.io/azure-load-balancer-internal` to `null`.

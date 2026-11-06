@@ -11,11 +11,29 @@ versions follow [Semantic Versioning](https://semver.org/).
   `config` included.
 - The chart's readiness probe, `GET /metrics`: the pod is ready once matchstick serves, whether or not GitHub and the
   cloud are reachable.
+- The chart's `files` value: files the configuration names, such as `azure.customData`, mounted beside it at
+  `/etc/matchstick/<name>`.
 - Dependabot also updates the Go modules and the workflows' actions, weekly, each at least 14 days old.
+- `matchstick github-app create`: registers the GitHub App through GitHub's App manifest flow, for an organisation or
+  a repository, on github.com or GitHub Enterprise Server. A page on a loopback address sends the manifest; the App is
+  private, has no webhook, and has only the permissions matchstick needs. Its private key goes to a new file with mode
+  0600; the output gives the App's ID, client ID, slug, page and install address.
+- `matchstick github-app check`: from the configuration and secret mount `run` uses, checks that GitHub accepts the
+  key, that the App is installed on the configured owner (reporting the installation ID), that the installation has
+  the permissions matchstick needs, and that the runner group exists for it; one entry per check, exit 1 on a failure.
+  Over `matchstick-adapter`, a failed check's report comes with the error (`data.result` in JSON-RPC, structured
+  content in MCP).
+- `docs/setup.md`: setting up from nothing to a first job, including the Azure custom role's exact actions and storing
+  the key with the External Secrets Operator.
+- An operation's `--help` lists its output's fields.
 
 ### Changed
 
 - A version tag publishes only after the checks CI runs pass on the tagged commit.
+
+### Fixed
+
+- The documentation no longer says a GitHub App can register an enterprise's runners; an enterprise needs a token.
 
 ## [0.1.0] - 2026-11-06
 

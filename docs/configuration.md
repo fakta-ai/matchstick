@@ -39,7 +39,21 @@ authorities the first time it meets each, over HTTP from `cacerts.digicert.com`,
 | `app.clientID`, `app.installationID` | | the GitHub App to sign in as, with its private key in the secret mount; without `app`, a token from the secret mount |
 
 The App needs, on an organisation: **Self-hosted runners: read and write** (organisation permission). On a repository:
-**Administration: read and write**.
+**Administration: read and write**. On both: **Metadata: read**. `matchstick github-app create` registers an App with
+exactly these; `matchstick github-app check` checks an installed one ([setup.md](setup.md#1-create-the-github-app)).
+GitHub Apps cannot register an enterprise's runners: for an enterprise `url`, leave out `app` and give a token (a
+classic personal access token with `manage_runners:enterprise`).
+
+### The credential
+
+The credential is not in this file. matchstick reads it once, when it starts, from the secret mount, by default
+`/var/run/secrets/matchstick` (`--secrets-dir` names another): the file `github-app-private-key`, the App's private key
+in PEM, or `github-token`, a token; exactly one of them. `run --secrets -` reads it from standard input instead, as a
+JSON object with `githubAppPrivateKey` or `githubToken`.
+
+On Kubernetes the chart mounts a Secret there (`githubSecret.name`). Create it yourself, or have it filled from your
+vault by the External Secrets Operator or the Secrets Store CSI driver's Secret sync;
+[setup.md](setup.md#3-store-the-key) has an example. After replacing the key, restart matchstick.
 
 ## `azure`
 
@@ -48,11 +62,11 @@ The App needs, on an organisation: **Self-hosted runners: read and write** (orga
 | `subscriptionID`, `resourceGroup`, `location` | where VMs and network interfaces are created |
 | `subnetID` | the subnet's resource ID; machines get a private address there and no public one |
 
-matchstick's identity needs, on the resource group: create, read and delete VMs and network interfaces; on the
-subnet: join (`Microsoft.Network/virtualNetworks/subnets/join/action`); on the image: read; on each pool's identity:
-assign (`Microsoft.ManagedIdentity/userAssignedIdentities/assign/action`). The built-in roles Virtual Machine
-Contributor and Network Contributor on the resource group cover the group's part. Reading a VM is also how a claim is
-matched to it.
+matchstick's identity needs, on the resource group: create, read and delete VMs, their OS disks and network
+interfaces; on the subnet: join (`Microsoft.Network/virtualNetworks/subnets/join/action`); on the image: read; on each
+pool's identity: assign (`Microsoft.ManagedIdentity/userAssignedIdentities/assign/action`). Reading a VM is also how a
+claim is matched to it. [setup.md](setup.md#role) lists the exact actions as a custom role. The built-in roles
+Virtual Machine Contributor and Network Contributor on the resource group also cover the group's part.
 
 ## `pools[]`
 

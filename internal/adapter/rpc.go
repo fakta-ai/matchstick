@@ -27,9 +27,21 @@ type rpcRequest struct {
 }
 
 type rpcError struct {
-	Code    int       `json:"code"`
-	Message string    `json:"message"`
-	Data    *op.Error `json:"data,omitempty"`
+	Code    int           `json:"code"`
+	Message string        `json:"message"`
+	Data    *rpcErrorData `json:"data,omitempty"`
+}
+
+// rpcErrorData is matchstick's error object and, when the failed call printed one, its result, such as a failed
+// check's report.
+type rpcErrorData struct {
+	Code    string          `json:"code"`
+	Message string          `json:"message"`
+	Result  json.RawMessage `json:"result,omitempty"`
+}
+
+func errorData(e *op.Error, result json.RawMessage) *rpcErrorData {
+	return &rpcErrorData{Code: e.Code, Message: e.Message, Result: result}
 }
 
 type rpcResponse struct {
@@ -126,7 +138,7 @@ func ServeRPC(ctx context.Context, r io.Reader, w io.Writer, tools []op.Tool, ru
 		params, err := withoutMeta(req.Params)
 		if err != nil {
 			respond(rpcResponse{ID: req.ID, Error: &rpcError{Code: rpcInvalidParams, Message: "params must be an object",
-				Data: op.Errorf(op.CodeInvalidInput, "params must be an object")}})
+				Data: errorData(op.Errorf(op.CodeInvalidInput, "params must be an object"), nil)}})
 			continue
 		}
 		callCtx, cancel := context.WithCancel(ctx)
@@ -152,7 +164,7 @@ func ServeRPC(ctx context.Context, r io.Reader, w io.Writer, tools []op.Tool, ru
 				if e.Code == op.CodeInvalidInput {
 					code = rpcInvalidParams
 				}
-				respond(rpcResponse{ID: req.ID, Error: &rpcError{Code: code, Message: e.Message, Data: e}})
+				respond(rpcResponse{ID: req.ID, Error: &rpcError{Code: code, Message: e.Message, Data: errorData(e, out)}})
 				return
 			}
 			respond(rpcResponse{ID: req.ID, Result: out})

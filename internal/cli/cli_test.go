@@ -121,3 +121,84 @@ func TestFlagNames(t *testing.T) {
 		}
 	}
 }
+
+type report struct {
+	OK     bool     `json:"ok"`
+	Failed []string `json:"failed,omitempty"`
+}
+
+func (r report) Failure() error {
+	if r.OK {
+		return nil
+	}
+	return op.Errorf(op.CodeCheckFailed, "failed: %s", strings.Join(r.Failed, ", "))
+}
+
+// grouped is a program whose operations are named by two words, like "github-app check".
+func grouped() (*App, *bytes.Buffer, *bytes.Buffer) {
+	var stdout, stderr bytes.Buffer
+	check := op.Define("thing check", "Checks the thing.", "calc thing check --broken", op.Annotations{ReadOnly: true},
+		func(_ context.Context, in struct {
+			Broken bool `json:"broken,omitempty"`
+		}) (report, error) {
+			if in.Broken {
+				return report{Failed: []string{"wheel"}}, nil
+			}
+			return report{OK: true}, nil
+		})
+	build := op.Define("thing make", "Makes the thing.", "calc thing make", op.Annotations{},
+		func(context.Context, struct{}) (report, error) { return report{OK: true}, nil })
+	return &App{Name: "calc", Summary: "things", Version: "1", Operations: []*op.Operation{check, build},
+		Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr}, &stdout, &stderr
+}
+
+func TestOperationsNamedByTwoWords(t *testing.T) {
+	a, stdout, _ := grouped()
+	if code := a.Main(context.Background(), []string{"thing", "check", "--json"}); code != ExitOK ||
+		strings.TrimSpace(stdout.String()) != `{"ok":true}` {
+		t.Errorf("exit %d, stdout %s", code, stdout)
+	}
+
+	a, stdout, _ = grouped()
+	a.Main(context.Background(), []string{"thing", "--help"})
+	if !strings.Contains(stdout.String(), "thing check  Checks the thing.") ||
+		!strings.Contains(stdout.String(), "thing make") {
+		t.Errorf("group help:\n%s", stdout)
+	}
+	a, _, stderr := grouped()
+	if code := a.Main(context.Background(), []string{"thing", "--json"}); code != ExitInvalid ||
+		!strings.Contains(stderr.String(), "calc thing check") {
+		t.Errorf("group without a command: exit %d, stderr %s", code, stderr)
+	}
+
+	a, stdout, _ = grouped()
+	a.Main(context.Background(), []string{"thing", "check", "--help"})
+	for _, want := range []string{"calc thing check [flags]", "--broken", "Output", "ok (boolean)", "failed (array)"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("help lacks %q:\n%s", want, stdout)
+		}
+	}
+
+	a, stdout, _ = grouped()
+	a.Main(context.Background(), []string{"--help", "--json"})
+	var tools struct{ Tools []op.Tool }
+	if err := json.Unmarshal(stdout.Bytes(), &tools); err != nil || tools.Tools[0].Name != "thing_check" ||
+		strings.Join(op.Words(tools.Tools[0].Name), " ") != "thing check" {
+		t.Errorf("tools: %s (%v)", stdout, err)
+	}
+}
+
+func TestAFailedCheckPrintsItsReportAndExitsOne(t *testing.T) {
+	a, stdout, stderr := grouped()
+	if code := a.Main(context.Background(), []string{"thing", "check", "--broken", "--json"}); code != ExitFailure {
+		t.Errorf("exit %d", code)
+	}
+	if got := strings.TrimSpace(stdout.String()); got != `{"ok":false,"failed":["wheel"]}` {
+		t.Errorf("stdout %s", got)
+	}
+	var e struct{ Error op.Error }
+	if err := json.Unmarshal(stderr.Bytes(), &e); err != nil || e.Error.Code != op.CodeCheckFailed ||
+		!strings.Contains(e.Error.Message, "wheel") {
+		t.Errorf("stderr %s (%v)", stderr, err)
+	}
+}

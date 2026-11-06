@@ -8,7 +8,8 @@ the code as it is, for people changing it.
 ## Packages
 
 ```
-cmd/matchstick/            the program: run, and the operations decide, plan, status, drain; holds the secrets
+cmd/matchstick/            the program: run, and the operations decide, plan, status, drain, github-app create and
+                           github-app check; holds the secrets
 cmd/matchstick-adapter/    the operations over JSON-RPC (rpc) and MCP (mcp); holds no secrets
 internal/adapter/          runs the matchstick command line for each JSON-RPC or MCP call
 internal/op/               operations: names, JSON Schemas in and out, annotations, checks on every call
@@ -25,6 +26,8 @@ internal/github/           the Runners interface, and its GitHub implementation:
                            the runner list, removal, the listener
 internal/github/fake/      Runners in memory
 internal/secret/           the GitHub credential, from standard input or the secret mount
+internal/githubapp/        the GitHub App: its manifest and GitHub's answer to it, the manifest flow's loopback page,
+                           and the checks of an installed App
 internal/metrics/          Prometheus collectors
 internal/server/           HTTP: /metrics and /healthz; the admin endpoint (drain) on a loopback address
 deploy/chart/matchstick/   Helm chart: one replica, Recreate, Azure workload identity
@@ -300,19 +303,32 @@ schema, runs the operation and checks the output against its schema.
 | `plan` | gathers each configured pool and returns what a round would do; changes nothing | yes | no | yes | yes |
 | `status` | each pool's machines, registrations and demand | yes | no | yes | yes |
 | `drain` | asks the running process, at `listen.admin`, to drain a pool or stop draining it | no | yes | yes | yes |
+| `github-app create` | registers a GitHub App through GitHub's App manifest flow and writes its private key to a new file | no | no | no | yes |
+| `github-app check` | checks the configured App: its key, its installation, the installation's permissions, the runner group | yes | no | yes | yes |
 
 `plan` and `status` read demand from the scale set's statistics, as GitHub reports them; `null` when it reports none.
 A drain lasts until the process restarts; to keep a pool empty, set its `maximum` to 0.
 
+`github-app create` serves a page on `127.0.0.1` (a random port), at a random path, answering only requests addressed
+to that address; another local user who cannot see the printed address cannot read the page. The page posts the
+manifest to GitHub with a random `state`, and GitHub's redirect back is accepted only with that `state`. The App
+GitHub returns must be owned by the organisation or repository owner asked for (`githubapp.CheckOwner`), or its key is
+not written. The private key goes to a file created with mode 0600 before the flow starts, removed if the flow fails.
+The manifest (`githubapp.NewManifest`), GitHub's answer (`githubapp.ParseConversion`, `githubapp.CheckOwner`) and the
+checks' verdicts (`githubapp.Evaluate`, over what `githubapp.Gather` read) are pure functions.
+
 The command line (`internal/cli`):
 
-- `matchstick <operation> [flags]`; `-h`/`--help` with an example; `--version`.
+- `matchstick <operation> [flags]`; an operation named by two words, such as `github-app check`, takes both;
+  `-h`/`--help` with the input flags, the output's fields and an example; `--version`.
 - Flags are the input schema's properties in kebab-case; `--input <file|->` gives the whole input as a JSON object,
   and flags override its fields.
 - `--json` prints one JSON value on stdout; without it, the same value indented.
-- `--help --json` prints the operations as MCP tool definitions.
+- `--help --json` prints the operations as MCP tool definitions; a two-word operation's tool name joins the words
+  with `_` (`github-app_check`).
 - Exit 0 on success, 2 on invalid input or configuration, 1 otherwise; with `--json`, errors go to stderr as
-  `{"error": {"code": "...", "message": "..."}}`.
+  `{"error": {"code": "...", "message": "..."}}`. A check that ran and failed (`github-app check`) prints its report
+  on stdout and fails with the code `check_failed`.
 - Nothing prompts; `--no-input` is accepted.
 
 ## rpc and mcp
@@ -323,11 +339,13 @@ the tool definitions from `matchstick --help --json`, and for each call runs `ma
 with the parameters (without `_meta`) on standard input.
 
 - JSON-RPC: the method is the operation, the result its output. Errors carry matchstick's error object in
-  `data` (`code`, `message`); invalid input is -32602, other failures -32000, an unknown method -32601, a line that is
-  not JSON -32700, after which the loop goes on. Requests run concurrently; `notifications/cancelled` with a
-  `requestId` stops that call.
+  `data` (`code`, `message`), and in `data.result` the output a failed call printed (a failed `github-app check`'s
+  report); invalid input is -32602, other failures -32000, an unknown method -32601, a line that is not JSON -32700,
+  after which the loop goes on. Requests run concurrently; `notifications/cancelled` with a `requestId` stops that
+  call.
 - MCP: each operation is a tool with its schemas and annotations; the output is the tool's structured content, an
-  error the tool's error result with the error object as text.
+  error the tool's error result with the error object as text, plus a failed check's report as structured content
+  and text.
 
 `--matchstick <path>` names the executable to run; by default `matchstick` on `PATH`. No operation reports progress.
 

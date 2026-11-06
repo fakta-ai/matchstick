@@ -22,6 +22,12 @@
       }
     },
     "config": {"$ref": "#/definitions/config"},
+    "files": {
+      "description": "Further files mounted at /etc/matchstick/<name>; matchstick.yaml is the chart's own.",
+      "type": "object",
+      "propertyNames": {"pattern": "^[-._a-zA-Z0-9]+$", "maxLength": 253, "not": {"enum": ["matchstick.yaml", ".", ".."]}},
+      "additionalProperties": {"type": "string"}
+    },
     "githubSecret": {
       "type": "object",
       "additionalProperties": false,

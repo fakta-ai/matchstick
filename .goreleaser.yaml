@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# What a version tag publishes. .github/workflows/release.yml runs this with GoReleaser v2.19.0:
+# - binaries of both commands for Linux and macOS, amd64 and arm64, in one archive per platform, each with an SPDX SBOM;
+# - checksums.txt over all of them, signed with Sigstore, keyless (checksums.txt.sigstore.json);
+# - the container image, ghcr.io/fakta-ai/matchstick:<version> for linux/amd64 and linux/arm64, built by ko on a
+#   distroless static base pinned by digest, with ko's SPDX SBOM, signed with Sigstore, keyless;
+# - a draft GitHub release with all the files, which the workflow publishes once the chart is published too.
+# Locally: goreleaser release --snapshot --clean --skip=sign (needs syft, and Docker for the image).
+version: 2
+project_name: matchstick
+
+builds:
+  - &build
+    id: matchstick
+    main: ./cmd/matchstick
+    binary: matchstick
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -X main.version={{ .Version }}"]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+  - <<: *build
+    id: matchstick-adapter
+    main: ./cmd/matchstick-adapter
+    binary: matchstick-adapter
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    wrap_in_directory: true
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+
+checksum:
+  name_template: checksums.txt
+
+# one SBOM per archive, by syft
+sboms:
+  - artifacts: archive
+
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: [sign-blob, "--bundle=${signature}", "${artifact}", --yes]
+    output: true
+
+kos:
+  - id: matchstick
+    build: matchstick
+    # distroless static, Debian 13, nonroot: CA certificates, time zones, user 65532, no shell
+    base_image: gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
+    repositories: [ghcr.io/fakta-ai/matchstick]
+    tags: ["{{ .Version }}"]
+    bare: true
+    platforms: [linux/amd64, linux/arm64]
+    user: "65532:65532"
+    creation_time: "{{ .CommitTimestamp }}"
+    ko_data_creation_time: "{{ .CommitTimestamp }}"
+    labels:
+      org.opencontainers.image.source: https://github.com/fakta-ai/matchstick
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.description: "Ephemeral GitHub Actions runners: one fresh cloud VM per job"
+
+docker_signs:
+  - artifacts: manifests
+    cmd: cosign
+    args: [sign, --yes, "${artifact}@${digest}"]
+    output: true
+
+release:
+  # published by the workflow once the chart is published too, so a release is never seen half-made
+  draft: true
+  # a re-run of the workflow replaces its own draft
+  replace_existing_draft: true

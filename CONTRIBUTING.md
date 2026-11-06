@@ -20,15 +20,19 @@ With [Nix](https://nixos.org/), `nix develop` gives a shell with Go, golangci-li
 go vet ./...
 go test -race ./...
 golangci-lint run ./...
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 helm lint deploy/chart/matchstick
 helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
 nix build .#matchstick
+# what a release builds, published nowhere; needs syft (https://github.com/anchore/syft), and Docker for the image
+go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean --skip=sign
 ```
 
-CI runs these on every pull request, in the flake's dev shell. When `go.sum` changes, update `vendorHash` in
-`nix/package.nix` (`nix build` prints the right one). Nothing needs a cloud account or a GitHub App: the tests use
-in-memory fakes, and `matchstick plan --config examples/fake.yaml` runs the planner against a fake pool.
+CI runs these on every pull request as parallel jobs: `nix build` only when `flake.nix`, `flake.lock`, `nix/`,
+`go.mod` or `go.sum` change (and on every commit on `main`), the GoReleaser snapshot only when `.goreleaser.yaml` or
+the release workflow change. When `go.sum` changes, update `vendorHash` in `nix/package.nix` (`nix build` prints the
+right one). Nothing needs a cloud account or a GitHub App: the tests use in-memory fakes, and
+`matchstick plan --config examples/fake.yaml` runs the planner against a fake pool.
 
 ## How the code is organised
 

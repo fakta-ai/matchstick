@@ -6,12 +6,15 @@ Each release publishes:
 
 | What | Where |
 |---|---|
-| binaries for Linux and macOS, amd64 and arm64, with `checksums.txt` | the GitHub release |
-| the container image (both executables, CA certificates, no shell, user 65532) | `ghcr.io/fakta-ai/matchstick:<version>` |
+| `matchstick` and `matchstick-adapter` for Linux and macOS, amd64 and arm64: one `.tar.gz` per platform, each with an SPDX SBOM (`.sbom.json`); `checksums.txt` over all of them, signed (`checksums.txt.sigstore.json`) | the GitHub release |
+| the container image, for linux/amd64 and linux/arm64: `matchstick` (`/ko-app/matchstick`, on `PATH`) on [distroless](https://github.com/GoogleContainerTools/distroless) static (CA certificates, time zones, no shell), user 65532, with an SPDX SBOM beside it in the registry | `ghcr.io/fakta-ai/matchstick:<version>` |
 | the Helm chart, its version and `appVersion` the release's | `oci://ghcr.io/fakta-ai/charts/matchstick:<version>` |
 
-The release notes give the image's and the chart's digests. Both are signed with Sigstore, keyless: the signing
-certificate names the release workflow at the version's tag. Check one before you use it:
+`matchstick-adapter` is in the archives only, not in the image.
+
+The release notes give the image's and the chart's digests. The image, the chart and `checksums.txt` are signed with
+Sigstore, keyless: the signing certificate names the release workflow at the version's tag. Check them before you use
+them:
 
 ```sh
 cosign verify ghcr.io/fakta-ai/matchstick@sha256:<digest> \
@@ -20,6 +23,20 @@ cosign verify ghcr.io/fakta-ai/matchstick@sha256:<digest> \
 cosign verify ghcr.io/fakta-ai/charts/matchstick@sha256:<digest> \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v<version>
+# the downloaded archives, through checksums.txt
+cosign verify-blob checksums.txt --bundle checksums.txt.sigstore.json \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/fakta-ai/matchstick/.github/workflows/release.yml@refs/tags/v<version>
+sha256sum --check --ignore-missing checksums.txt
+```
+
+A release published from the public repository also has GitHub's build provenance attestations (SLSA provenance) for
+its archives, `checksums.txt`, the image and the chart, naming the commit and the workflow run that built them:
+
+```sh
+gh attestation verify matchstick_<version>_linux_amd64.tar.gz --repo fakta-ai/matchstick
+gh attestation verify oci://ghcr.io/fakta-ai/matchstick@sha256:<digest> --repo fakta-ai/matchstick
+gh attestation verify oci://ghcr.io/fakta-ai/charts/matchstick@sha256:<digest> --repo fakta-ai/matchstick
 ```
 
 Flux checks the chart itself when its `OCIRepository` has `verify.provider: cosign` with that issuer and identity

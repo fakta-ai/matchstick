@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The codex gate (.github/workflows/codex.yml) passes a pull request without a review only when Dependabot opened it
 # and flake.lock is the one path it changes. Runs the workflow's own step against a fake `gh` that answers from fixture
-# pull requests, and reads back the status it sets. Run it in the dev shell, which has jq and yq.
+# pull requests, and reads back the status it sets. Needs bash, jq and yq (mikefarah's), as GitHub's Ubuntu runners and
+# the dev shell have.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)

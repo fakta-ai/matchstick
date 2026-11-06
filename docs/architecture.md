@@ -190,6 +190,8 @@ matchstick sends no nonce. A failed download or VM lookup is `unavailable`; ever
 
 ### Security notes
 
+The whole picture, threat by threat: [threat-model.md](threat-model.md).
+
 - The bootstrap is public: the claim endpoint's address and certificate.
 - Only processes inside a VM can obtain its attested document. Before the runner has claimed, the only code running
   there is the image's own; after, nothing is left to release, so a job cannot register a second runner.

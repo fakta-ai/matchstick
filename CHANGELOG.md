@@ -37,6 +37,8 @@ versions follow [Semantic Versioning](https://semver.org/).
   and holds it in memory only. Its TLS key is made at start and never stored; machines trust only its certificate.
 - `matchstick_claims_total{pool,result}`.
 - The chart's `image.digest` pins the image by digest.
+- `docs/threat-model.md`: what matchstick protects, whom it trusts, each threat with its mitigation and what remains,
+  and what the operator must provide.
 
 ### Security
 

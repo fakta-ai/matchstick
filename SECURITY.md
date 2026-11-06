@@ -18,6 +18,8 @@ The latest release. matchstick is young; fixes are not backported.
 
 ## Scope notes
 
+What matchstick protects, whom it trusts and what it leaves to the operator: [docs/threat-model.md](docs/threat-model.md).
+
 - Self-hosted runners should run only workflows you trust. A runner's machine is deleted after its job, but anything
   the machine's network and identity reach during the job is reachable by that job's code.
 - No secret is put in a machine's cloud settings (on Azure: user data, custom data, tags, extensions, OS profile),

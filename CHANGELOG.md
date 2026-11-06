@@ -11,6 +11,8 @@ versions follow [Semantic Versioning](https://semver.org/).
   `config` included.
 - The chart's readiness probe, `GET /metrics`: the pod is ready once matchstick serves, whether or not GitHub and the
   cloud are reachable.
+- The chart's `files` value: files the configuration names, such as `azure.customData`, mounted beside it at
+  `/etc/matchstick/<name>`.
 - Dependabot also updates the Go modules and the workflows' actions, weekly, each at least 14 days old.
 - `matchstick github-app create`: registers the GitHub App through GitHub's App manifest flow, for an organisation or
   a repository, on github.com or GitHub Enterprise Server. A page on a loopback address sends the manifest; the App is

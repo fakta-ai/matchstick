@@ -12,6 +12,10 @@ config:
   instance: ci
   pools: []
 
+# Further files beside the configuration, mounted at /etc/matchstick/<name>, such as a pool's azure.customData:
+#   --set-file files.cloud-init\.yaml=cloud-init.yaml, with customData: /etc/matchstick/cloud-init.yaml
+files: {}
+
 # The Secret holding the GitHub credential: a key github-app-private-key (with config.github.app) or github-token.
 # Created outside the chart.
 githubSecret:

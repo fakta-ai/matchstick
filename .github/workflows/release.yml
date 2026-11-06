@@ -58,8 +58,11 @@ jobs:
           echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           ./stream-image | docker load
           docker tag "matchstick:$(nix eval --raw .#packages.x86_64-linux.image.imageTag)" "$image"
-          docker push "$image"
-          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
+          docker push "$image" | tee push.log
+          # the digest the registry gave the pushed tag ("<tag>: digest: sha256:… size: …")
+          digest=$(awk '$2 == "digest:" {print $3}' push.log)
+          test -n "$digest" || { echo "docker push printed no digest"; exit 1; }
+          ref=ghcr.io/$OWNER/matchstick@$digest
           nix develop -c cosign sign --yes "$ref"
           printf '\n**Image:** `%s`\n' "$ref" >> notes.md
       - name: chart

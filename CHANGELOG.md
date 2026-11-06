@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-06
+
 ### Added
 
 - The chart's `values.schema.json`: Helm refuses unknown values, wrong types and values outside their allowed set,

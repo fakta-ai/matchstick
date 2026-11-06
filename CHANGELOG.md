@@ -5,6 +5,18 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The chart's `values.schema.json`: Helm refuses unknown values, wrong types and values outside their allowed set,
+  `config` included.
+- The chart's readiness probe, `GET /metrics`: the pod is ready once matchstick serves, whether or not GitHub and the
+  cloud are reachable.
+- Dependabot also updates the Go modules and the workflows' actions, weekly, each at least 14 days old.
+
+### Changed
+
+- A version tag publishes only after the checks CI runs pass on the tagged commit.
+
 ## [0.1.0] - 2026-11-06
 
 ### Added

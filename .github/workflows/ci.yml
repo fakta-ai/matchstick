@@ -1,8 +1,11 @@
+# The checks every pull request and every commit on main passes. The release workflow runs them too, on the tagged
+# commit, before it publishes anything.
 name: ci
 on:
   pull_request:
   push:
     branches: [main]
+  workflow_call:
 permissions:
   contents: read
 concurrency:
@@ -37,6 +40,8 @@ jobs:
       - name: vulnerabilities
         run: nix develop -c govulncheck ./...
       - name: chart
-        run: nix develop -c helm lint deploy/chart/matchstick
+        run: |
+          nix develop -c helm lint deploy/chart/matchstick
+          nix develop -c helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
       - name: build
         run: nix build .#matchstick .#image

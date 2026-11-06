@@ -41,6 +41,16 @@ spec:
               containerPort: {{ .Values.metrics.port }}
             - name: claim
               containerPort: {{ .Values.claim.port }}
+          # Ready once the process serves: it binds every listener, the claim endpoint's too, before it serves any, and
+          # /metrics needs neither GitHub nor the cloud, so an outage of either leaves the claim endpoint in service.
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            periodSeconds: 10
+            failureThreshold: 3
+          # Restarts the process after four failed /healthz checks in a row, 30 seconds apart: a pool has gathered no
+          # machines for three intervals plus five minutes.
           livenessProbe:
             httpGet:
               path: /healthz

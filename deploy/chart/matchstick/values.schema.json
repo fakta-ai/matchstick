@@ -1,0 +1,202 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "matchstick chart values",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "config", "githubSecret", "serviceAccount", "metrics", "claim"],
+  "properties": {
+    "global": {"type": "object"},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": {"type": "string", "minLength": 1},
+        "tag": {"type": "string", "description": "Defaults to the chart's appVersion."},
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[0-9a-f]{64})?$",
+          "description": "The image's manifest digest; when set, tag is ignored."
+        },
+        "pullPolicy": {"enum": ["Always", "IfNotPresent", "Never"]}
+      }
+    },
+    "config": {"$ref": "#/definitions/config"},
+    "githubSecret": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"$ref": "#/definitions/dnsName"}
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": {"type": "boolean"},
+        "name": {"anyOf": [{"const": ""}, {"$ref": "#/definitions/dnsName"}]},
+        "azureClientID": {"type": "string"},
+        "annotations": {"$ref": "#/definitions/stringMap"}
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requests": {"$ref": "#/definitions/quantities"},
+        "limits": {"$ref": "#/definitions/quantities"},
+        "claims": {"type": "array", "items": {"type": "object"}}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "port": {"$ref": "#/definitions/port"},
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port", "service"],
+      "properties": {
+        "port": {"$ref": "#/definitions/port"},
+        "service": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {"enum": ["LoadBalancer", "NodePort", "ClusterIP"]},
+            "annotations": {"$ref": "#/definitions/stringMap"}
+          }
+        }
+      }
+    },
+    "podAnnotations": {"$ref": "#/definitions/stringMap"},
+    "nodeSelector": {"$ref": "#/definitions/stringMap"},
+    "tolerations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "key": {"type": "string"},
+          "operator": {"enum": ["Exists", "Equal"]},
+          "value": {"type": "string"},
+          "effect": {"enum": ["", "NoSchedule", "PreferNoSchedule", "NoExecute"]},
+          "tolerationSeconds": {"type": "integer"}
+        }
+      }
+    },
+    "affinity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodeAffinity": {"type": "object"},
+        "podAffinity": {"type": "object"},
+        "podAntiAffinity": {"type": "object"}
+      }
+    }
+  },
+  "definitions": {
+    "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+    "dnsName": {"type": "string", "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$", "maxLength": 253},
+    "stringMap": {"type": "object", "additionalProperties": {"type": "string"}},
+    "quantities": {"type": "object", "additionalProperties": {"type": ["string", "number"]}},
+    "duration": {
+      "type": "string",
+      "pattern": "^([0-9]+(\\.[0-9]*)?(ns|us|µs|ms|s|m|h))+$",
+      "description": "A Go duration, such as 30s, 10m or 3h."
+    },
+    "config": {
+      "description": "matchstick's configuration file (docs/configuration.md), without secrets and without listen, which the chart sets.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["instance", "pools"],
+      "properties": {
+        "instance": {"type": "string", "pattern": "^[a-z][a-z0-9]*$", "maxLength": 10},
+        "interval": {"$ref": "#/definitions/duration"},
+        "claimURL": {"type": "string", "pattern": "^https://[^/?#@\\s]+(/[^?#\\s]*)?$"},
+        "github": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url"],
+          "properties": {
+            "url": {"type": "string", "pattern": "^https?://"},
+            "runnerGroup": {"type": "string"},
+            "app": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["clientID", "installationID"],
+              "properties": {
+                "clientID": {"type": "string", "minLength": 1},
+                "installationID": {"type": "integer", "minimum": 1}
+              }
+            }
+          }
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subscriptionID", "resourceGroup", "location", "subnetID"],
+          "properties": {
+            "subscriptionID": {"type": "string", "minLength": 1},
+            "resourceGroup": {"type": "string", "minLength": 1},
+            "location": {"type": "string", "minLength": 1},
+            "subnetID": {"type": "string", "minLength": 1}
+          }
+        },
+        "fake": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["pools"],
+          "properties": {
+            "pools": {"type": "object", "additionalProperties": {"type": "object"}}
+          }
+        },
+        "pools": {"type": "array", "items": {"$ref": "#/definitions/pool"}}
+      },
+      "allOf": [
+        {"if": {"required": ["azure"]}, "then": {"required": ["claimURL"]}},
+        {"if": {"required": ["fake"]}, "then": {"properties": {"github": false, "azure": false}}}
+      ]
+    },
+    "pool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "maximum"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$", "maxLength": 20},
+        "labels": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "maximum": {"type": "integer", "minimum": 0},
+        "spares": {"type": "integer", "minimum": 0},
+        "maxLifetime": {"$ref": "#/definitions/duration"},
+        "registrationTimeout": {"$ref": "#/definitions/duration"},
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size", "image"],
+          "properties": {
+            "size": {"type": "string", "minLength": 1},
+            "image": {"type": "string", "minLength": 1},
+            "identity": {"type": "string"},
+            "ephemeralOSDisk": {"enum": ["", "ResourceDisk", "CacheDisk", "NvmeDisk"]},
+            "osDiskSizeGB": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+            "spot": {"type": "boolean"},
+            "acceleratedNetworking": {"type": "boolean"},
+            "customData": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

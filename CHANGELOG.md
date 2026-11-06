@@ -39,6 +39,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 - The chart's `image.digest` pins the image by digest.
 - `docs/threat-model.md`: what matchstick protects, whom it trusts, each threat with its mitigation and what remains,
   and what the operator must provide.
+- Releases also publish the Helm chart, `oci://ghcr.io/fakta-ai/charts/matchstick`, and sign the image and the chart
+  with Sigstore (keyless, for the release workflow at the version's tag); the release notes give both digests.
 
 ### Security
 

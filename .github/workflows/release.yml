@@ -1,5 +1,7 @@
-# A version tag (vX.Y.Z) builds the binaries and the container image, and publishes them as a GitHub release and
-# ghcr.io/fakta-ai/matchstick:<version>.
+# A version tag (vX.Y.Z) builds the binaries, the container image and the Helm chart, and publishes them as a GitHub
+# release, ghcr.io/<owner>/matchstick:<version> and oci://ghcr.io/<owner>/charts/matchstick:<version>. The image and
+# the chart are signed with Sigstore, keyless: the signature's certificate names this workflow at the tag, and is
+# recorded in Sigstore's public transparency log. The release notes give both digests.
 name: release
 on:
   push:
@@ -13,6 +15,8 @@ jobs:
     permissions:
       contents: write
       packages: write
+      # the OIDC token Sigstore issues the signing certificate for
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,13 +50,34 @@ jobs:
         env:
           VERSION: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          ACTOR: ${{ github.actor }}
         run: |
-          image=ghcr.io/${{ github.repository_owner }}/matchstick:${VERSION#v}
+          image=ghcr.io/$OWNER/matchstick:${VERSION#v}
           nix build .#image --out-link stream-image
-          echo "$GH_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
           ./stream-image | docker load
           docker tag "matchstick:$(nix eval --raw .#packages.x86_64-linux.image.imageTag)" "$image"
           docker push "$image"
+          ref=$(docker inspect --format '{{index .RepoDigests 0}}' "$image")
+          nix develop -c cosign sign --yes "$ref"
+          printf '\n**Image:** `%s`\n' "$ref" >> notes.md
+      - name: chart
+        env:
+          VERSION: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          # the chart's version and appVersion are the release's, so its default image is this release's
+          nix develop -c helm package deploy/chart/matchstick --version "${VERSION#v}" --app-version "${VERSION#v}" \
+            --destination chart
+          echo "$GH_TOKEN" | nix develop -c helm registry login ghcr.io -u "$ACTOR" --password-stdin
+          nix develop -c helm push "chart/matchstick-${VERSION#v}.tgz" "oci://ghcr.io/$OWNER/charts" 2>&1 | tee push.log
+          digest=$(awk '$1 == "Digest:" {print $2}' push.log)
+          test -n "$digest" || { echo "helm push printed no digest"; exit 1; }
+          nix develop -c cosign sign --yes "ghcr.io/$OWNER/charts/matchstick@$digest"
+          printf '**Chart:** `oci://ghcr.io/%s/charts/matchstick:%s` (`%s`)\n' "$OWNER" "${VERSION#v}" "$digest" >> notes.md
       - name: publish
         env:
           VERSION: ${{ github.ref_name }}

@@ -6,7 +6,7 @@ rules for people; this file is the short form. How it is built: [docs/architectu
 ## Build and check
 
 ```sh
-nix develop                    # Go, golangci-lint, govulncheck, Helm, jq, yq
+nix develop                    # Go, golangci-lint, govulncheck, Helm, cosign, jq, yq
 go vet ./...
 go test -race ./...
 golangci-lint run ./...        # configuration in .golangci.yml
@@ -63,4 +63,5 @@ once `check` passes.
   `refactor:`, `ci:`.
 - Branches `feat/<slug>`, `fix/<slug>`, `chore/<slug>`, `docs/<slug>`; merged with a merge commit.
 - One concern per pull request, small enough to review.
-- Releases are cut by pushing a `vX.Y.Z` tag; `CHANGELOG.md` gets the version's section first.
+- Releases are cut by pushing a `vX.Y.Z` tag; `CHANGELOG.md` gets the version's section first. The release workflow
+  publishes the binaries, the image and the chart, and signs the image and the chart (Sigstore, keyless).

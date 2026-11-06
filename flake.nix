@@ -37,6 +37,8 @@
             pkgs.golangci-lint
             pkgs.govulncheck
             pkgs.kubernetes-helm
+            # signs releases (.github/workflows/release.yml)
+            pkgs.cosign
             # the review gate's test (.github/tests/codex.sh)
             pkgs.jq
             pkgs.yq-go

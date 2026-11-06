@@ -3,6 +3,7 @@ package fake
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -14,27 +15,33 @@ import (
 )
 
 // Provider keeps machines in memory. Created machines start pending; tests move them along with SetState.
+//
+// Each created machine gets a made-up id, as a cloud gives each VM one. Its proof of identity is {"id": "<id>"}: Proof
+// returns it, as the cloud would to code running on that machine.
 type Provider struct {
-	mu       sync.Mutex
-	now      func() time.Time
-	machines map[string]plan.Machine
-	configs  map[string]string
-	failures map[string][]error
+	mu         sync.Mutex
+	now        func() time.Time
+	machines   map[string]plan.Machine
+	bootstraps map[string][]byte
+	ids        map[string]string
+	nextID     int
+	failures   map[string][]error
 }
 
 var _ provider.Provider = (*Provider)(nil)
 
 // New returns a provider holding the given machines. now stamps created machines.
 func New(now func() time.Time, machines ...plan.Machine) *Provider {
-	p := &Provider{now: now, machines: map[string]plan.Machine{}, configs: map[string]string{},
-		failures: map[string][]error{}}
+	p := &Provider{now: now, machines: map[string]plan.Machine{}, bootstraps: map[string][]byte{},
+		ids: map[string]string{}, failures: map[string][]error{}}
 	for _, m := range machines {
 		p.machines[m.Name] = m
 	}
 	return p
 }
 
-// Fail makes the next calls of op ("create", "list" or "delete") fail with the given errors, one call each.
+// Fail makes the next calls of op ("create", "list", "delete" or "identify") fail with the given errors, one call
+// each.
 func (p *Provider) Fail(op string, errs ...error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -62,7 +69,9 @@ func (p *Provider) Create(_ context.Context, spec provider.CreateSpec) error {
 	}
 	p.machines[spec.Name] = plan.Machine{Name: spec.Name, State: plan.Pending, CreatedAt: p.now(),
 		ExpiresAt: spec.ExpiresAt}
-	p.configs[spec.Name] = spec.JITConfig
+	p.bootstraps[spec.Name] = slices.Clone(spec.Bootstrap)
+	p.nextID++
+	p.ids[spec.Name] = fmt.Sprintf("vm-%d", p.nextID)
 	return nil
 }
 
@@ -89,8 +98,47 @@ func (p *Provider) Delete(_ context.Context, name string) error {
 		return err
 	}
 	delete(p.machines, name)
-	delete(p.configs, name)
+	delete(p.bootstraps, name)
+	delete(p.ids, name)
 	return nil
+}
+
+// fakeProof is the fake cloud's signed document: here, only the machine's id.
+type fakeProof struct {
+	ID string `json:"id"`
+}
+
+// Identify accepts a proof carrying the id of the machine name, while that machine exists.
+func (p *Provider) Identify(_ context.Context, name string, proof json.RawMessage) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := p.failure("identify"); err != nil {
+		return err
+	}
+	var doc fakeProof
+	if err := json.Unmarshal(proof, &doc); err != nil {
+		return fmt.Errorf("%w: %w", provider.ErrNotProven, err)
+	}
+	if id, ok := p.ids[name]; !ok || doc.ID == "" || doc.ID != id {
+		return fmt.Errorf("%w: id %q is not machine %s's", provider.ErrNotProven, doc.ID, name)
+	}
+	return nil
+}
+
+// Proof returns the proof code running on machine name would get from the cloud; a made-up id if there is no such
+// machine.
+func (p *Provider) Proof(name string) json.RawMessage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	id, ok := p.ids[name]
+	if !ok {
+		id = "vm-stranger"
+	}
+	b, err := json.Marshal(fakeProof{ID: id})
+	if err != nil {
+		panic(err)
+	}
+	return b
 }
 
 // SetState changes a machine's state, as its cloud would.
@@ -105,9 +153,9 @@ func (p *Provider) SetState(name string, state plan.MachineState) {
 	p.machines[name] = m
 }
 
-// JITConfig returns the configuration a machine was created with.
-func (p *Provider) JITConfig(name string) string {
+// Bootstrap returns what a machine was given at creation.
+func (p *Provider) Bootstrap(name string) []byte {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.configs[name]
+	return slices.Clone(p.bootstraps[name])
 }

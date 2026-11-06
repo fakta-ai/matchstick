@@ -32,3 +32,14 @@ versions follow [Semantic Versioning](https://semver.org/).
   from a Secret.
 - A Nix flake: the package, a dev shell, checks, and the container image (no shell, non-root).
 - The release workflow: a version tag publishes binaries for Linux and macOS and `ghcr.io/fakta-ai/matchstick`.
+- The claim endpoint (`claimURL`, `listen.claim`): a machine fetches its runner's JIT configuration over TLS, proving
+  which VM it is with Azure's attested document; matchstick releases each configuration once, only to its own VM,
+  and holds it in memory only. Its TLS key is made at start and never stored; machines trust only its certificate.
+- `matchstick_claims_total{pool,result}`.
+
+### Security
+
+- The JIT configuration is no longer put in the VM's user data, which anyone allowed to read the VM could read and
+  use to register as its runner. User data now holds public bootstrap information only (the claim endpoint's address
+  and certificate); runner images claim the configuration as `docs/image-contract.md` describes, and
+  `examples/cloud-init.yaml` does so.

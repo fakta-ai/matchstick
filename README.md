@@ -18,6 +18,8 @@ It creates the runners as Azure virtual machines and registers them with GitHub 
   machines, idle spares and maximum lifetime.
 - Azure VMs from a Compute Gallery image, with a private address only, an optional ephemeral OS disk on the VM's
   local storage, and Spot priority that falls back to regular priority when Spot has no capacity.
+- No secret in the VMs' settings: each VM claims its runner registration from matchstick, proving which VM it is with
+  Azure's signed attested document, and gets it once.
 - GitHub organisations, repositories and enterprises, on github.com or GitHub Enterprise Server, with a GitHub App or
   a token.
 - Prometheus metrics, a health check, and a command line with JSON in and out (`plan`, `status`, `drain`), also served
@@ -29,7 +31,8 @@ It creates the runners as Azure virtual machines and registers them with GitHub 
    [image contract](docs/image-contract.md) in a Compute Gallery, a GitHub App installed on your organisation with
    **Self-hosted runners: read and write**, and an Azure identity for matchstick with the roles in
    [docs/configuration.md](docs/configuration.md#azure).
-2. Write a configuration, starting from [examples/azure.yaml](examples/azure.yaml).
+2. Write a configuration, starting from [examples/azure.yaml](examples/azure.yaml). `claimURL` is where the VMs reach
+   matchstick's claim endpoint (`listen.claim`, port 8443 by default), so the runners' subnet must reach it.
 3. Put the App's private key in the secret mount, `/var/run/secrets/matchstick/github-app-private-key`.
 4. See what it would do, then run it:
 

@@ -5,6 +5,7 @@ image:
   pullPolicy: IfNotPresent
 
 # matchstick's configuration file (docs/configuration.md), without secrets. listen addresses are set by the chart.
+# With azure, set claimURL to the claim Service's address as the VMs reach it, such as https://10.20.0.4:8443/claim.
 config:
   instance: ci
   pools: []
@@ -32,6 +33,18 @@ metrics:
   port: 9090
   service:
     enabled: true
+
+# The claim endpoint, where VMs fetch their runner configuration over TLS. matchstick makes its key at start, in
+# memory; there is no Secret for it. The VMs' subnet must reach the Service, and nothing may terminate TLS in front of
+# it.
+claim:
+  port: 8443
+  service:
+    # An internal Azure load balancer by default, so that VMs in the virtual network reach it. To give it a fixed
+    # address for claimURL, add service.beta.kubernetes.io/azure-load-balancer-ipv4: <address>.
+    type: LoadBalancer
+    annotations:
+      service.beta.kubernetes.io/azure-load-balancer-internal: "true"
 
 podAnnotations: {}
 nodeSelector: {}

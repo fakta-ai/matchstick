@@ -7,3 +7,7 @@ Drain a pool (until the pod restarts):
   kubectl exec deploy/{{ include "matchstick.fullname" . }} -- matchstick drain --config /etc/matchstick/matchstick.yaml --pool <pool>
 
 Metrics and health: port {{ .Values.metrics.port }}, /metrics and /healthz.
+
+Claim endpoint (VMs fetch their runner configuration here): Service {{ include "matchstick.fullname" . }}-claim, port {{ .Values.claim.port }}.
+config.claimURL must be https://<its address as the VMs reach it>:{{ .Values.claim.port }}/<path>; find the address with
+  kubectl get service {{ include "matchstick.fullname" . }}-claim

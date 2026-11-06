@@ -38,6 +38,7 @@ type azureWorld struct {
 	deletedNICs []string
 	createErr   []string // error codes for the next VM PUTs, refused before acceptance
 	allocErr    []string // error codes for the next VM creations, failing after acceptance
+	getErr      []string // error codes for the next VM GETs, refused as forbidden
 }
 
 func newProvider(t *testing.T, shape Shape) (*Provider, *azureWorld) {
@@ -94,6 +95,11 @@ func newProvider(t *testing.T, shape Shape) (*Provider, *azureWorld) {
 			resp azfake.Responder[armcompute.VirtualMachinesClientGetResponse], errResp azfake.ErrorResponder) {
 			w.mu.Lock()
 			defer w.mu.Unlock()
+			if len(w.getErr) > 0 {
+				errResp.SetResponseError(http.StatusForbidden, w.getErr[0])
+				w.getErr = w.getErr[1:]
+				return
+			}
 			vm, ok := w.vms[name]
 			if !ok {
 				errResp.SetResponseError(http.StatusNotFound, "ResourceNotFound")
@@ -179,7 +185,7 @@ var shape = Shape{Size: "Standard_D4ads_v5",
 
 func create(t *testing.T, p *Provider, name string) error {
 	t.Helper()
-	return p.Create(context.Background(), provider.CreateSpec{Name: name, JITConfig: "jit-" + name,
+	return p.Create(context.Background(), provider.CreateSpec{Name: name, Bootstrap: []byte(`{"machine":"` + name + `"}`),
 		ExpiresAt: now.Add(3 * time.Hour)})
 }
 
@@ -210,7 +216,7 @@ func TestCreateBuildsAPrivateVMFromTheGalleryImage(t *testing.T) {
 		t.Errorf("OS disk %+v", disk)
 	case vm.Identity == nil || vm.Identity.UserAssignedIdentities[s.Identity] == nil:
 		t.Error("identity")
-	case string(user) != "jit-ci-build-a" || string(custom) != "#cloud-config\n":
+	case string(user) != `{"machine":"ci-build-a"}` || string(custom) != "#cloud-config\n":
 		t.Errorf("user data %q, custom data %q", user, custom)
 	case *props.NetworkProfile.NetworkInterfaces[0].Properties.DeleteOption != armcompute.DeleteOptionsDelete:
 		t.Error("network interface not deleted with the VM")

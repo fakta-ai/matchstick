@@ -12,6 +12,7 @@ require (
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/prometheus/client_golang v1.25.0
+	github.com/smallstep/pkcs7 v0.2.3
 	sigs.k8s.io/yaml v1.6.0
 )
 

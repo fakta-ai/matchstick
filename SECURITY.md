@@ -20,5 +20,11 @@ The latest release. matchstick is young; fixes are not backported.
 
 - Self-hosted runners should run only workflows you trust. A runner's machine is deleted after its job, but anything
   the machine's network and identity reach during the job is reachable by that job's code.
-- The runner's single-use registration is readable from the machine's instance metadata by any process on it until the
-  runner has used it.
+- No secret is put in a machine's cloud settings (on Azure: user data, custom data, tags, extensions, OS profile),
+  which anyone allowed to read the machine can read. The machine claims its runner's single-use registration from
+  matchstick's claim endpoint with a document its cloud signs, and matchstick releases it once, only to the machine it
+  was made for, before that machine's registration timeout. Any process on the machine can make that claim before the
+  runner does; run nothing there before the claim but the image's own boot code.
+- The claim endpoint's TLS key exists only in matchstick's memory; machines trust only its certificate.
+- A report that matchstick released a registration to anything but its own machine, or released one twice, is in
+  scope.

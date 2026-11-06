@@ -1,6 +1,8 @@
 # matchstick on Azure. The GitHub credential is not here: it is read from the secret mount
 # (/var/run/secrets/matchstick/github-app-private-key) or from standard input.
 instance: ci
+# Where the VMs claim their runner configuration: matchstick's claim endpoint (listen.claim) as the VMs reach it.
+claimURL: https://10.20.0.4:8443/claim
 github:
   url: https://github.com/your-org
   runnerGroup: default

@@ -1,8 +1,9 @@
 # Architecture
 
 matchstick gives every GitHub Actions job a fresh cloud virtual machine and deletes the machine when the job is done.
-It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture. This document
-describes the code as it is, for people changing it.
+It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, and the one
+thing it holds besides, each waiting machine's runner configuration, lives only in its memory. This document describes
+the code as it is, for people changing it.
 
 ## Packages
 
@@ -15,10 +16,11 @@ internal/cli/              the command-line adapter: flags, --input, --json, hel
 internal/config/           the configuration file: types, defaults, validation
 internal/naming/           machine and registration names: building them, reading owner, pool and age back
 internal/plan/             the decisions: a pure function from what one pool's round observed to what to do
-internal/pool/             one pool's round: gather, plan, act; backoff; drain
-internal/provider/         the Provider interface: create, list and delete one pool's machines
+internal/pool/             one pool's round: gather, plan, act; backoff; drain; the runner configurations it holds
+internal/provider/         the Provider interface: create, list and delete one pool's machines; check a machine's proof
 internal/provider/fake/    Provider in memory
-internal/provider/azure/   Provider on Azure virtual machines
+internal/provider/azure/   Provider on Azure virtual machines; the attested-document check
+internal/claim/            the claim endpoint: machines fetch their runner configuration over TLS
 internal/github/           the Runners interface, and its GitHub implementation: scale sets, JIT configurations,
                            the runner list, removal, the listener
 internal/github/fake/      Runners in memory
@@ -41,6 +43,8 @@ type Provider interface {
 	Create(ctx context.Context, spec CreateSpec) error    // returns once accepted; ErrCapacity: retry later
 	List(ctx context.Context) ([]plan.Machine, error)     // every machine of the pool, half-made ones included
 	Delete(ctx context.Context, name string) error        // idempotent
+	// nil if proof shows its sender is the pool's machine name; ErrNotProven if it does not
+	Identify(ctx context.Context, name string, proof json.RawMessage) error
 }
 
 // github: one pool's runner registrations.
@@ -76,10 +80,11 @@ file itself.
 ## Azure
 
 Per machine: a network interface `<name>-nic` in the configured subnet with a private address only, then a VM
-`<name>` from the pool's Compute Gallery image, with the JIT configuration as user data (base64), the OS disk and
-network interface set to be deleted with the VM, boot diagnostics on, and a throwaway SSH key (Azure requires a login;
-its private half is discarded). Both carry the tags `matchstick-instance`, `matchstick-pool`, `matchstick-created-at`,
-`matchstick-expires-at` and `matchstick-priority`; the instance and pool tags decide ownership.
+`<name>` from the pool's Compute Gallery image, with the machine's bootstrap (see [Claims](#claims)) as user data
+(base64), the OS disk and network interface set to be deleted with the VM, boot diagnostics on, and a throwaway SSH key
+(Azure requires a login; its private half is discarded). Both carry the tags `matchstick-instance`, `matchstick-pool`,
+`matchstick-created-at`, `matchstick-expires-at` and `matchstick-priority`; the instance and pool tags decide
+ownership. Nothing secret goes into any of the VM's settings.
 
 - Pool options: VM size, image, a user-assigned identity or none, an ephemeral OS disk (`ResourceDisk`, `CacheDisk`
   or `NvmeDisk`), OS disk size, Spot, accelerated networking, a custom-data file (such as cloud-init).
@@ -92,6 +97,106 @@ its private half is discarded). Both carry the tags `matchstick-instance`, `matc
   pending. A network interface without its VM is pending for two minutes, then failed.
 - `Delete` starts the VM's deletion, or the network interface's if no VM is left, and returns once Azure accepts it.
 - Sign-in: workload identity, then a managed identity, then the Azure CLI. No client secret.
+- `Identify` checks an attested document (see [Claims](#claims)).
+
+## Claims
+
+A VM's settings (user data, custom data, tags, extensions, OS profile) are readable by anyone allowed to read the VM,
+so matchstick puts no secret in them. A machine gets public bootstrap information only, and fetches its runner's JIT
+configuration from matchstick's claim endpoint, proving which machine it is with a document its cloud signs and only it
+can obtain.
+
+```mermaid
+sequenceDiagram
+    participant P as matchstick (pool)
+    participant G as GitHub
+    participant A as Azure
+    participant V as VM (runner image)
+    participant I as IMDS (inside the VM)
+    P->>G: register runner <name>
+    G-->>P: JIT configuration, held in memory
+    P->>A: create VM <name>, user data = bootstrap
+    V->>I: user data, attested document
+    I-->>V: bootstrap; document signed by Microsoft naming the VM's vmId
+    V->>P: POST claimURL {machine, proof}, trusting only the bootstrap's certificate
+    P->>P: is a configuration held for <name>?
+    P->>P: check the document: signature, signer, times, subscription, chain
+    P->>A: GET VM <name>: the pool's tags, the document's vmId?
+    P->>P: take the configuration out of memory
+    P-->>V: {jitConfig}
+    V->>G: run.sh --jitconfig: registers, runs one job
+```
+
+The bootstrap, as JSON:
+
+| Field | Value |
+|---|---|
+| `machine` | the machine's name |
+| `claimURL` | the claim endpoint, the configured `claimURL` |
+| `claimCertificate` | the claim endpoint's certificate (PEM), the only one the machine trusts for `claimURL` |
+
+The endpoint (`internal/claim`) serves `POST` on `claimURL`'s path, over TLS with a key generated at start and held
+only in memory; its self-signed certificate names `claimURL`'s host. The request is `{"machine": "<name>", "proof":
+<the cloud's document>}` (at most 64 KiB); the answer is `{"jitConfig": "..."}`, or `{"error": {"code": "...",
+"message": "..."}}` with 400 `invalid_input`, 403 `refused` (final: nothing will be released to this machine) or 503
+`unavailable` (try again). Neither the proof nor the configuration is logged.
+
+### Single claim
+
+A pool holds a machine's configuration from just before it asks the cloud for the machine until the first of: a claim
+releases it, the creation fails, a round deletes the machine, or the registration timeout passes since the machine's
+creation. A claim is checked in this order, cheapest first, and refused at the first failure:
+
+1. the name belongs to a pool, and that pool holds a configuration for it;
+2. the provider's `Identify` accepts the proof for that name;
+3. the configuration is taken out of memory (under the pool's lock); a claim that finds it already gone is refused.
+
+Releasing removes the only copy, so nothing is released twice: not to a retry after success, a replayed document, a
+second claim racing the first, or a job running on the machine fetching its own document. Nothing is written
+anywhere; after a restart the new process holds nothing, so every machine still waiting for its configuration is
+refused (and no longer trusts the endpoint, whose key is new).
+
+### Azure's check
+
+The proof is the attested document as IMDS returns it (`/metadata/attested/document`): `{"encoding": "pkcs7",
+"signature": "<base64>"}`. `Identify` refuses it unless:
+
+- it is a PKCS#7 SignedData (parsed with `github.com/smallstep/pkcs7`) with exactly one signer, whose signature over
+  the content verifies;
+- the signer's certificate names `metadata.azure.com` or a subdomain of it among its DNS names;
+- the content's `timeStamp.createdOn` is at most 5 minutes in the future and its `timeStamp.expiresOn` at most 5
+  minutes in the past (Azure signs documents valid for 6 hours);
+- its `subscriptionId` is the configured subscription;
+- the signer's certificate chains, at the current time, to one of the root certificate authorities Microsoft lists for
+  Azure (embedded in `internal/provider/azure/roots.pem`). Intermediates the document does not carry are downloaded
+  from the certificate's Authority Information Access URL, only from the hosts Microsoft lists for it
+  (`cacerts.digicert.com`, `cacerts.digicert.cn`, `cacerts.geotrust.com`, `caissuers.microsoft.com`,
+  `www.microsoft.com`), at most 64 KiB and 10 seconds each, and kept in memory;
+- the VM `<name>` exists, carries the pool's instance and pool tags, and its `vmId` is the document's.
+
+matchstick sends no nonce. A failed download or VM lookup is `unavailable`; everything else is `refused`.
+
+### When things go wrong
+
+| What happens | Outcome |
+|---|---|
+| matchstick restarts while machines boot | their claims fail TLS verification or are refused; the image powers the machine off; the next round deletes it (finished), removes its registration, and creates a replacement if demand needs one |
+| a claim fails midway (network, Azure API, certificate download) | `unavailable`; the configuration stays held; the image tries again |
+| two claims for the same machine at once | one gets the configuration, the other is refused |
+| a machine never claims | its configuration is dropped after the registration timeout; the unregistered rule deletes the machine and its registration |
+| the cloud refuses the machine | its configuration is dropped and its registration removed |
+| clocks disagree | documents are accepted from 5 minutes before their creation to 5 minutes after their expiry; certificates are checked at matchstick's time |
+| a document for another VM, a VM outside the pool, another subscription; expired, altered, signed by a certificate not for `metadata.azure.com` or not chaining to an Azure root | refused |
+
+### Security notes
+
+- The bootstrap is public: the claim endpoint's address and certificate.
+- Only processes inside a VM can obtain its attested document. Before the runner has claimed, the only code running
+  there is the image's own; after, nothing is left to release, so a job cannot register a second runner.
+- A machine cannot claim another's configuration: its document names its own vmId.
+- A host posing as the endpoint gets nothing from the runner and can give it nothing: the runner trusts only the
+  certificate in its bootstrap, whose private key never leaves matchstick's memory.
+- The fake provider's proof is the machine's made-up id; it is for tests and trying the planner only.
 
 ## Secrets
 
@@ -99,7 +204,7 @@ The GitHub credential (an App's private key or a token) comes from standard inpu
 `{"githubAppPrivateKey": "..."}` or `{"githubToken": "..."}`), otherwise from the secret mount: the files
 `github-app-private-key` or `github-token` in `/var/run/secrets/matchstick` (`--secrets-dir` for `run`, `secretsDir`
 for the operations). Never from flags, environment variables or the configuration file; the secret type prints as
-redacted.
+redacted. The claim endpoint's TLS key is generated at start and never leaves memory.
 
 ## run
 
@@ -108,10 +213,11 @@ redacted.
 - on `listen.metrics` (default `:9090`): `/metrics`, and `/healthz`, which fails once a pool has gathered nothing for
   three intervals plus five minutes (counted from the start before the first round);
 - on `listen.admin` (default `127.0.0.1:9091`): `GET /pools`, and `POST /pools/{pool}/drain` with
-  `{"draining": true|false}`.
+  `{"draining": true|false}`;
+- on `listen.claim` (default `:8443`), when `claimURL` is set: the claim endpoint, over TLS.
 
 Logs are JSON lines on stdout. SIGINT or SIGTERM stops it; machines and registrations stay as they are for the next
-start.
+start, and machines still waiting for their configuration power off and are replaced.
 
 ## Names
 
@@ -160,11 +266,13 @@ whatever GitHub answers.
 1. **Gather**: list the pool's machines and registrations; demand is the last value given to `SetDemand`. If the
    machines cannot be listed, the round does nothing. If the registrations cannot be listed, the round goes on with
    them unknown.
-2. **Decide**: `plan.Decide`.
-3. **Act**, at most four calls at once, for at most five minutes: registration removals and deletions, then creations. A deletion with a
-   registration removes it first; a guarded one stops if GitHub refuses. A creation registers a runner under a new
-   name, then creates the machine with its JIT configuration and an expiry of now plus the pool's maximum lifetime; if
-   the cloud refuses, the registration is removed at once (the orphan rule removes it later if that fails too).
+2. **Decide**: `plan.Decide`. The pool drops the configurations it holds for machines the decision deletes and for
+   machines older than the registration timeout.
+3. **Act**, at most four calls at once, for at most five minutes: registration removals and deletions, then
+   creations. A deletion with a registration removes it first; a guarded one stops if GitHub refuses. A creation
+   registers a runner under a new name, holds its JIT configuration, then creates the machine with its bootstrap and an
+   expiry of now plus the pool's maximum lifetime; if the cloud refuses, the configuration is dropped and the
+   registration removed at once (the orphan rule removes it later if that fails too).
 
 A drain or pause that begins during a round stops the creations it has not started. Nothing is retried within a
 round; the next round observes again and plans again. `Pool.Run` runs a round at once,
@@ -175,8 +283,8 @@ Creation pauses, in memory:
 - after `ErrCapacity`: 2 minutes, doubling up to 30, reset by a successful creation;
 - after three machines in a row deleted as unregistered: 10 minutes; a machine whose runner is online resets the count.
 
-A new `Pool` over the same cloud and GitHub starts with demand unknown: its first round cleans up (finished, expired,
-unregistered, orphan) and creates nothing until demand is set.
+A new `Pool` over the same cloud and GitHub starts with demand unknown and no configurations: its first round cleans
+up (finished, expired, unregistered, orphan) and creates nothing until demand is set.
 
 ## Operations
 
@@ -224,19 +332,21 @@ with the parameters (without `_meta`) on standard input.
 ## Configuration
 
 YAML (or JSON), unknown fields rejected. `instance` (letters and digits, at most 10), `interval` (default 30s),
-`listen`, and `pools`, each with `name` (at most 20), `labels`, `maximum`, `spares`, `maxLifetime` (default 6h) and
-`registrationTimeout` (default 10m); then either `github` and `azure` sections with each pool's `azure` shape, or a
-`fake` section. [configuration.md](configuration.md) lists every field.
+`listen`, `claimURL`, and `pools`, each with `name` (at most 20), `labels`, `maximum`, `spares`, `maxLifetime`
+(default 6h) and `registrationTimeout` (default 10m); then either `github` and `azure` sections with each pool's
+`azure` shape, or a `fake` section. [configuration.md](configuration.md) lists every field.
 
 ## Metrics
 
 Per pool: demand, machines by state, registrations by status, creations, creation failures by kind, deletions and
-removals by reason, rounds by result, round duration, time of the last successful round, creation paused, draining.
+removals by reason, rounds by result, round duration, time of the last successful round, creation paused, draining,
+claims by result.
 
 ## Limits
 
 - Azure only.
-- One replica.
+- One replica. A restart makes the machines still waiting for their runner configuration unable to claim it: they
+  power off and are replaced.
 - Each machine serves one job.
 - Two installations must not share an instance name in the same GitHub organisation or resource group.
 - The network, identities, images and role assignments must exist beforehand.

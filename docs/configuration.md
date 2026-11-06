@@ -11,10 +11,24 @@ holds no secrets. Examples: [examples/azure.yaml](../examples/azure.yaml), [exam
 | `interval` | `30s` | the longest time between two rounds of a pool |
 | `listen.metrics` | `:9090` | serves `/metrics` and `/healthz` |
 | `listen.admin` | `127.0.0.1:9091` | serves the drain endpoint; keep it on a loopback address |
+| `listen.claim` | `:8443` | serves the claim endpoint over TLS, when `claimURL` is set; the machines' subnet must reach it |
+| `claimURL` | required with `azure` | where machines claim their runner configuration: `https://<host>[:<port>][/<path>]`, an address of `listen.claim` as the machines reach it, such as `https://10.20.0.4:8443/claim` or `https://matchstick.runners.internal/claim`. It goes into every machine's user data, with the endpoint's certificate |
 | `github` | | where the scale sets live; required unless `fake` is set |
 | `azure` | | where the machines go; required unless `fake` is set |
 | `fake` | | made-up pools instead of GitHub and Azure, to try the planner |
 | `pools` | required | the pools |
+
+### The claim endpoint
+
+matchstick makes the endpoint's TLS key when it starts and keeps it in memory only, with a self-signed certificate for
+`claimURL`'s host; there is no key or certificate to configure. Every machine gets that certificate in its user data
+and trusts nothing else there, so the endpoint must be reached directly: a TCP load balancer or a Kubernetes Service
+passes it through, but nothing may terminate TLS in front of it. A restart makes a new key; machines created before it
+cannot claim and are replaced.
+
+Checking a machine's proof on Azure, matchstick downloads the certificates of Microsoft's intermediate certificate
+authorities the first time it meets each, over HTTP from `cacerts.digicert.com`, `cacerts.digicert.cn`,
+`cacerts.geotrust.com`, `caissuers.microsoft.com` or `www.microsoft.com`; allow those in its outbound network.
 
 ## `github`
 
@@ -37,7 +51,8 @@ The App needs, on an organisation: **Self-hosted runners: read and write** (orga
 matchstick's identity needs, on the resource group: create, read and delete VMs and network interfaces; on the
 subnet: join (`Microsoft.Network/virtualNetworks/subnets/join/action`); on the image: read; on each pool's identity:
 assign (`Microsoft.ManagedIdentity/userAssignedIdentities/assign/action`). The built-in roles Virtual Machine
-Contributor and Network Contributor on the resource group cover the group's part.
+Contributor and Network Contributor on the resource group cover the group's part. Reading a VM is also how a claim is
+matched to it.
 
 ## `pools[]`
 

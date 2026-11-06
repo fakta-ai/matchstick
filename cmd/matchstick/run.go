@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 
+	"github.com/fakta-ai/matchstick/internal/claim"
 	"github.com/fakta-ai/matchstick/internal/cli"
 	"github.com/fakta-ai/matchstick/internal/metrics"
 	"github.com/fakta-ai/matchstick/internal/op"
@@ -73,13 +75,23 @@ func run(ctx context.Context, configPath string, secrets secretSource, log *slog
 	if err != nil {
 		return err
 	}
+	var endpoint *claim.Endpoint
+	var claimSettings pool.Claim
+	if cfg.ClaimURL != "" {
+		if endpoint, err = claim.NewEndpoint(cfg.ClaimURL, now()); err != nil {
+			return op.Errorf(op.CodeInvalidConfig, "%v", err)
+		}
+		claimSettings = endpoint.Settings()
+	}
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	m := metrics.New(reg)
 	var pools []*pool.Pool
 	var served []server.Pool
 	for _, pc := range cfg.Pools {
-		p := pool.New(poolSettings(cfg, pc), backends[pc.Name].machines, backends[pc.Name].runners, m, log, now)
+		s := poolSettings(cfg, pc)
+		s.Claim = claimSettings
+		p := pool.New(s, backends[pc.Name].machines, backends[pc.Name].runners, m, log, now)
 		pools = append(pools, p)
 		served = append(served, p)
 	}
@@ -92,6 +104,11 @@ func run(ctx context.Context, configPath string, secrets secretSource, log *slog
 			ReadHeaderTimeout: 10 * time.Second},
 		{Addr: cfg.Listen.Admin, Handler: server.Admin(served), ReadHeaderTimeout: 10 * time.Second},
 	}
+	if endpoint != nil {
+		s := endpoint.Server(pools, log)
+		s.Addr = cfg.Listen.Claim
+		servers = append(servers, s)
+	}
 	var listeners []net.Listener
 	for _, s := range servers {
 		l, err := net.Listen("tcp", s.Addr)
@@ -100,6 +117,9 @@ func run(ctx context.Context, configPath string, secrets secretSource, log *slog
 				_ = open.Close()
 			}
 			return op.Errorf(op.CodeInvalidConfig, "listen on %s: %v", s.Addr, err)
+		}
+		if s.TLSConfig != nil {
+			l = tls.NewListener(l, s.TLSConfig)
 		}
 		listeners = append(listeners, l)
 	}

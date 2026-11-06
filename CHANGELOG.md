@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-06
+
 ### Added
 
 - Releases publish an SPDX SBOM for each archive and for the image, and sign `checksums.txt` with Sigstore, keyless

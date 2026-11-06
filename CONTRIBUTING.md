@@ -28,10 +28,11 @@ nix build .#matchstick
 go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean --skip=sign
 ```
 
-CI runs these on every pull request as parallel jobs: `nix build` only when `flake.nix`, `flake.lock`, `nix/`,
-`go.mod` or `go.sum` change (and on every commit on `main`), the GoReleaser snapshot only when `.goreleaser.yaml` or
-the release workflow change. When `go.sum` changes, update `vendorHash` in `nix/package.nix` (`nix build` prints the
-right one). Nothing needs a cloud account or a GitHub App: the tests use in-memory fakes, and
+CI runs these on every pull request as parallel jobs: the Go checks only when Go files, `cmd/`, `internal/`,
+`examples/`, `go.mod`, `go.sum`, `.golangci.yml` or the CI workflow change, `nix build` only when `flake.nix`,
+`flake.lock`, `nix/`, `go.mod` or `go.sum` change (both on every commit on `main`), the GoReleaser snapshot only when
+`.goreleaser.yaml` or the release workflow change. When `go.sum` changes, update `vendorHash` in `nix/package.nix`
+(`nix build` prints the right one). Nothing needs a cloud account or a GitHub App: the tests use in-memory fakes, and
 `matchstick plan --config examples/fake.yaml` runs the planner against a fake pool.
 
 ## How the code is organised

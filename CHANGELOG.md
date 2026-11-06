@@ -5,6 +5,16 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The release workflow signs the Helm chart: cosign now logs in to the registry the chart is pushed to. 0.3.0's
+  chart was pushed but not signed, so 0.3.0 was not published.
+
+### Changed
+
+- Pull requests run the Go checks only when what Go builds or tests changes. Every commit on `main` also builds every
+  release target, so a release builds from a warm cache.
+
 ## [0.3.0] - 2026-11-06
 
 ### Added

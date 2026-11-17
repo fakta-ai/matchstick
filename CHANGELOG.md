@@ -13,6 +13,11 @@ versions follow [Semantic Versioning](https://semver.org/).
   artifact (`0.4.0+457a3409ec79`): the `helm.sh/chart` label had the `+` in it, which Kubernetes refuses in a label,
   so every object of the release was rejected. The `+` is written `_`, as Helm's own chart scaffold does.
 
+### Security
+
+- Built with Go 1.27.4, which fixes GO-2026-6859: a race in `http.MaxBytesReader` could crash an HTTP/1 server. The
+  claim endpoint and the admin endpoint read their requests through it.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added

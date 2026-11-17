@@ -10,7 +10,7 @@
 app.kubernetes.io/name: {{ .Chart.Name }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/version: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
-helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
+helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" | quote }}
 {{- end -}}
 
 {{- define "matchstick.selector" -}}

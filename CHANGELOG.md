@@ -5,6 +5,12 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The chart installs when its version carries build metadata, as Flux gives it when it installs the chart from an OCI
+  artifact (`0.4.0+457a3409ec79`): the `helm.sh/chart` label had the `+` in it, which Kubernetes refuses in a label,
+  so every object of the release was rejected. The `+` is written `_`, as Helm's own chart scaffold does.
+
 ## [0.4.0] - 2026-11-06
 
 ### Added

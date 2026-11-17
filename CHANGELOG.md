@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-17
+
 ### Fixed
 
 - The chart installs when its version carries build metadata, as Flux gives it when it installs the chart from an OCI

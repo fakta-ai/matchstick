@@ -93,6 +93,17 @@ jobs:
             helm lint deploy/chart/matchstick --values "$values"
             helm template matchstick deploy/chart/matchstick --values "$values" > /dev/null
           done
+      # a version with build metadata (0.4.0+abc, as Flux gives a chart it installs from an OCI artifact) still makes
+      # labels Kubernetes accepts
+      - name: labels with a version that has build metadata
+        run: |
+          set -euo pipefail
+          packaged=$(mktemp -d)
+          helm package deploy/chart/matchstick --version '0.0.0+0123456789ab' --destination "$packaged" > /dev/null
+          labels=$(helm template matchstick "$packaged"/matchstick-*.tgz | yq -N '.metadata.labels[]')
+          [ -n "$labels" ]
+          refused=$(grep -vxE '([A-Za-z0-9][-A-Za-z0-9_.]{0,61})?[A-Za-z0-9]' <<< "$labels" || true)
+          [ -z "$refused" ] || { echo "::error::label values Kubernetes refuses: $refused"; exit 1; }
 
   # the workflows' own decisions, against fixtures: the review gate's one exception (Dependabot's flake.lock-only pull
   # requests) and the release's (which version, the tag, the end-to-end wait)

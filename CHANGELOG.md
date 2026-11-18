@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-18
+
 ### Added
 
 - `pools[].idleTimeout`: a pool with `spares` and an `idleTimeout` keeps its spares only while it has a job and for

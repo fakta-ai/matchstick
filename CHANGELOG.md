@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-18
+
 ### Added
 
 - A pool can name its own runner group, `pools[].runnerGroup`; a pool that names none stays in `github.runnerGroup`.

@@ -413,5 +413,6 @@ that should have it, and leave the other pools in a group that admits more.
    assigned to it. `matchstick status` shows each pool's `runnerGroup`.
 
 If the group is missing or the App cannot use it, that pool creates no machines and its log says why
-(`the pool cannot scale until its scale set is in its runner group`), retrying every 2 minutes at most; the other
-pools are not affected. [configuration.md](configuration.md#runner-groups) has the details.
+(`the pool cannot scale until its scale set is in its runner group`) and its `matchstick_listening` stays 0, retrying
+every 2 minutes at most; the other pools are not affected. [configuration.md](configuration.md#runner-groups) has
+the details, and [operations.md](operations.md#watching) an alert for a pool that is not listening.

@@ -17,6 +17,7 @@ type Metrics struct {
 	LastSuccess      *prometheus.GaugeVec
 	CreationPaused   *prometheus.GaugeVec
 	Draining         *prometheus.GaugeVec
+	Listening        *prometheus.GaugeVec
 	Claims           *prometheus.CounterVec
 	// ClaimProbes counts the claim endpoint's connections that closed before sending a byte.
 	ClaimProbes prometheus.Counter
@@ -60,6 +61,9 @@ func New(reg prometheus.Registerer) *Metrics {
 			"When the pool's last round that could see its machines gathered them, in seconds since the Unix epoch."),
 		CreationPaused: gauge("creation_paused", "1 while the pool backs off creating machines."),
 		Draining:       gauge("draining", "1 while the pool drains."),
+		Listening: gauge("listening",
+			"1 while the pool's listener holds a message session for its scale set, so GitHub's jobs reach the pool; "+
+				"0 before the first session and between sessions."),
 		Claims: counter("claims_total",
 			"Claims of runner configurations by result (released, refused, failed).", "result"),
 		ClaimProbes: probes,

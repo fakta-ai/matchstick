@@ -106,6 +106,11 @@ func (p *Pool) Draining() bool {
 	return p.draining
 }
 
+// SetListening records whether the pool's listener holds a message session for its scale set.
+func (p *Pool) SetListening(listening bool) {
+	p.metrics.Listening.WithLabelValues(p.settings.Name).Set(boolFloat(listening))
+}
+
 // LastSuccess returns when the last round that could see the pool's machines gathered them; zero before the first.
 func (p *Pool) LastSuccess() time.Time {
 	p.mu.Lock()

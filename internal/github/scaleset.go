@@ -298,12 +298,16 @@ func (s *ScaleSet) Demand(ctx context.Context) (*int, error) {
 type Sink interface {
 	SetDemand(n int)
 	Draining() bool
+	// SetListening says whether the listener holds a message session: true once one opens, false when it ends.
+	SetListening(bool)
 }
 
 // Listen ensures the scale set (Ensure), then holds a message session for it until ctx ends, reporting demand to sink
 // and acquiring the jobs GitHub offers unless the pool drains. Until the scale set is ensured, the pool knows no
-// demand, so it creates no machines. A failed Ensure or session is retried after a backoff.
+// demand, so it creates no machines. A failed Ensure or session is retried after a backoff. sink hears false at once,
+// true while each session is open and false when it ends.
 func (s *ScaleSet) Listen(ctx context.Context, maxRunners int, sink Sink) {
+	sink.SetListening(false)
 	owner, err := os.Hostname()
 	if err != nil {
 		owner = "matchstick"
@@ -352,6 +356,8 @@ func (s *ScaleSet) listen(ctx context.Context, owner string, maxRunners int, sin
 			s.log.Warn("closing the message session", "error", err)
 		}
 	}()
+	sink.SetListening(true)
+	defer sink.SetListening(false)
 	l, err := listener.New(session, listener.Config{ScaleSetID: id, MaxRunners: maxRunners,
 		Logger: s.log.With("component", "listener")})
 	if err != nil {

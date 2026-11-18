@@ -84,7 +84,8 @@ file itself.
 - The listener (`ScaleSet.Listen`) holds the scale set's message session through the client's `listener` package.
   For each message it records `TotalAssignedJobs` as the pool's demand and acquires the jobs offered, unless the pool
   drains (then it also tells GitHub its capacity is 0). It never calls the cloud. A failed session, or a scale set not
-  yet ensured, is tried again after a backoff from 5 seconds to 2 minutes.
+  yet ensured, is tried again after a backoff from 5 seconds to 2 minutes. The pool's `matchstick_listening` is 1 from
+  a session's opening until it ends, 0 otherwise.
 - If GitHub refuses a second message session for the same scale set (another copy holds it), that copy keeps retrying.
   Until it has a session it knows no demand, so it creates and scales down nothing; its rounds still apply the cleanup
   rules, repeating the other copy's deletions, which are idempotent.
@@ -372,7 +373,8 @@ each pool's `azure` shape, or a `fake` section. [configuration.md](configuration
 
 Per pool: demand, machines by state, registrations by status, creations, creation failures by kind, deletions and
 removals by reason, rounds by result, round duration, time of the last successful round, creation paused, draining,
-claims by result. For the claim endpoint: connections closed before their first byte.
+listening (holding a message session), claims by result. For the claim endpoint: connections closed before their
+first byte.
 
 ## Limits
 

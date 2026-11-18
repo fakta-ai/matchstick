@@ -386,13 +386,14 @@ func TestListenBackoffStartsOverAfterALongSession(t *testing.T) {
 	stop := listen(t, c, &sink{f: f})
 	f.waitForPolls(3)
 	stop()
+	// The pool is listening from each session's opening until it ends, and not before the first or between them.
 	want := []string{
-		"session refused", "backoff 5s",
-		"session opened", "poll capacity=5", "session closed", "backoff 10s",
-		"session opened", "poll capacity=5", "session closed", "backoff 5s",
-		"session opened", "poll capacity=5", "session closed",
+		"listening 0", "session refused", "backoff 5s",
+		"session opened", "listening 1", "poll capacity=5", "listening 0", "session closed", "backoff 10s",
+		"session opened", "listening 1", "poll capacity=5", "listening 0", "session closed", "backoff 5s",
+		"session opened", "listening 1", "poll capacity=5", "listening 0", "session closed",
 	}
-	if got := f.log("session", "poll", "backoff"); !slices.Equal(got, want) {
+	if got := f.log("session", "poll", "backoff", "listening"); !slices.Equal(got, want) {
 		t.Errorf("got  %q\nwant %q", got, want)
 	}
 }
@@ -427,13 +428,20 @@ func TestAPoolWithoutItsRunnerGroupKnowsNoDemandWhileTheOthersListen(t *testing.
 		f.record("backoff " + d.String())
 		return retry
 	}
-	stopDeploy := listenTo(t, c.ScaleSet("ci", "deploy", "deploy", []string{"deploy"}), &sink{f: f, pool: "deploy"})
-	stopBuild := listenTo(t, c.ScaleSet("ci", "build", "linux", nil), &sink{f: f, pool: "build"})
+	deploy, build := &sink{f: f, pool: "deploy"}, &sink{f: f, pool: "build"}
+	stopDeploy := listenTo(t, c.ScaleSet("ci", "deploy", "deploy", []string{"deploy"}), deploy)
+	stopBuild := listenTo(t, c.ScaleSet("ci", "build", "linux", nil), build)
 	f.waitFor("demand build", 1)
 	f.waitFor("backoff", 1)
 	if got := f.log("create", "demand", "backoff"); !slices.Equal(got, []string{"backoff 5s", "demand build 2"}) &&
 		!slices.Equal(got, []string{"demand build 2", "backoff 5s"}) {
 		t.Errorf("with the deploy group missing, GitHub was asked and the pools told %q", got)
+	}
+	if deploy.isListening() || !build.isListening() {
+		t.Errorf("listening: deploy %v, build %v; want false, true", deploy.isListening(), build.isListening())
+	}
+	if got := f.log("listening deploy"); !slices.Equal(got, []string{"listening deploy 0"}) {
+		t.Errorf("deploy was told %q", got)
 	}
 	for _, want := range []string{"the pool cannot scale", "pool=deploy", "runnerGroup=deploy",
 		`no runner group found with name \"deploy\"`} {
@@ -445,8 +453,19 @@ func TestAPoolWithoutItsRunnerGroupKnowsNoDemandWhileTheOthersListen(t *testing.
 	group := f.addGroup("deploy")
 	retry <- time.Time{}
 	f.waitFor("demand deploy", 1)
+	if !deploy.isListening() {
+		t.Error("deploy holds a session but is not listening")
+	}
+	// The session ends: the pool is no longer listening.
 	stopDeploy()
+	if deploy.isListening() || !build.isListening() {
+		t.Errorf("after deploy's session ended, listening: deploy %v, build %v", deploy.isListening(),
+			build.isListening())
+	}
 	stopBuild()
+	if build.isListening() {
+		t.Error("build listening after its session ended")
+	}
 	if got := f.log("create"); !slices.Equal(got,
 		[]string{"create ci-deploy group=" + strconv.Itoa(group) + " labels=deploy disableUpdate=true"}) {
 		t.Errorf("created %q", got)

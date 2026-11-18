@@ -56,7 +56,8 @@ group, and matchstick keeps one scale set of that name across all of the target'
   creates nor changes groups. `matchstick github-app check` checks each group the configuration names.
 - A pool whose group is missing, or that the credential cannot use, creates no machines: its listener logs `the pool
   cannot scale until its scale set is in its runner group` with the reason, and tries again after 5 seconds, doubling
-  up to 2 minutes. Its rounds still delete finished, expired and unregistered machines; the other pools run as usual.
+  up to 2 minutes; its `matchstick_listening` stays 0 meanwhile. Its rounds still delete finished, expired and
+  unregistered machines; the other pools run as usual.
 - When a pool's group changes, `run` moves the pool's scale set from the group it is in to the new one. It stays the
   same scale set, with the same ID, so the runners registered in it and the jobs GitHub assigned to it stay with it,
   and no job is left on a scale set nobody listens to; from then on the new group's repository access applies.

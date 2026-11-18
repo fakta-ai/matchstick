@@ -561,20 +561,41 @@ func (f *fakeGitHub) ack(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// sink records the demand it is told into the fake's event log, after its pool's name if it has one.
+// sink records the demand and the listening state it is told into the fake's event log, after its pool's name if it
+// has one, and keeps the listening state.
 type sink struct {
-	f        *fakeGitHub
-	pool     string
-	mu       sync.Mutex
-	draining bool
+	f         *fakeGitHub
+	pool      string
+	mu        sync.Mutex
+	draining  bool
+	listening bool
 }
 
-func (s *sink) SetDemand(n int) {
+func (s *sink) record(what string, n int) {
 	if s.pool != "" {
-		s.f.record("demand " + s.pool + " " + strconv.Itoa(n))
-		return
+		what += " " + s.pool
 	}
-	s.f.record("demand " + strconv.Itoa(n))
+	s.f.record(what + " " + strconv.Itoa(n))
+}
+
+func (s *sink) SetDemand(n int) { s.record("demand", n) }
+
+func (s *sink) SetListening(on bool) {
+	s.mu.Lock()
+	s.listening = on
+	s.mu.Unlock()
+	n := 0
+	if on {
+		n = 1
+	}
+	s.record("listening", n)
+}
+
+// isListening is the listening state last told.
+func (s *sink) isListening() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.listening
 }
 
 func (s *sink) Draining() bool {

@@ -80,8 +80,12 @@ same CI run (`.github/workflows/release.yml`):
    `RELEASE_E2E_TIMEOUT` minutes (30 by default). An end-to-end system installs the staged chart with
    `image.repository` set to `ghcr.io/fakta-ai/matchstick-staging`, runs a real job on a machine it makes, and sets
    that status, naming the chart's digest (the digests are in the run's summary). A status naming another digest is
-   about an earlier build of the same commit and doesn't count. A failure or timeout ends the run, with the draft and
-   the staged images left as they are;
+   about an earlier build of the same commit and doesn't count. When the repository variable
+   `RELEASE_E2E_ACK_TIMEOUT` is set too (minutes; unset, nothing waits for it), the end-to-end system must
+   acknowledge the build within that time with any status of that context naming the chart's digest, usually
+   `pending` as its test starts; until it does, the run fails at that bound rather than at `RELEASE_E2E_TIMEOUT`,
+   so a release nobody is testing fails early. A failure or timeout ends the run, with the draft and the staged
+   images left as they are;
 4. copies the staged image and chart, by digest, with their signatures, SBOMs and attestations, to
    `ghcr.io/fakta-ai/matchstick:<version>` and `ghcr.io/fakta-ai/charts/matchstick:<version>`;
 5. publishes the draft release;

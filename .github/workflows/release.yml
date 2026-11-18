@@ -12,7 +12,10 @@
 #    this commit is success and its description names the staged chart's digest (at most RELEASE_E2E_TIMEOUT minutes,
 #    30 by default): an end-to-end system installs the staged chart (with the image's repository set to the staging
 #    one), runs a real job with it and reports it there. A status naming another digest is an earlier run's and
-#    doesn't count. Failure or timeout ends the run; the draft and the staged digests stay;
+#    doesn't count. When RELEASE_E2E_ACK_TIMEOUT is set too, the end-to-end system must acknowledge the build within
+#    that many minutes, with any status naming its digest (pending as it starts, or its result); with none by then the
+#    run fails at once rather than at RELEASE_E2E_TIMEOUT. Failure or timeout ends the run; the draft and the staged
+#    digests stay;
 # 5. promote: copies the staged image and chart, by digest and with their signatures, SBOMs and attestations, to
 #    ghcr.io/fakta-ai/matchstick:<version> and ghcr.io/fakta-ai/charts/matchstick:<version>;
 # 6. publish: publishes the draft, its notes the version's section of CHANGELOG.md with both digests;
@@ -289,7 +292,8 @@ jobs:
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-  # the maintainers' end-to-end check of the staged image and chart, when RELEASE_E2E_CONTEXT is set
+  # the maintainers' end-to-end check of the staged image and chart, when RELEASE_E2E_CONTEXT is set; its
+  # acknowledgement within RELEASE_E2E_ACK_TIMEOUT, when that is set too
   e2e:
     needs: [goreleaser, chart]
     runs-on: ubuntu-24.04
@@ -306,19 +310,30 @@ jobs:
           DIGEST: ${{ needs.chart.outputs.digest }}
           CONTEXT: ${{ vars.RELEASE_E2E_CONTEXT }}
           TIMEOUT: ${{ vars.RELEASE_E2E_TIMEOUT || '30' }}
+          ACK_TIMEOUT: ${{ vars.RELEASE_E2E_ACK_TIMEOUT }}
         run: |
           set -euo pipefail
           if [ -z "$CONTEXT" ]; then
             echo "RELEASE_E2E_CONTEXT is not set: no end-to-end check"
             exit 0
           fi
-          if [[ ! $TIMEOUT =~ ^[0-9]+$ ]] || [ "$TIMEOUT" -lt 1 ] || [ "$TIMEOUT" -gt 350 ]; then
-            echo "::error::RELEASE_E2E_TIMEOUT must be minutes from 1 to 350: '$TIMEOUT'"
+          minutes() { [[ $1 =~ ^[0-9]+$ ]] && [ "$1" -ge 1 ] && [ "$1" -le 350 ]; }
+          minutes "$TIMEOUT" || { echo "::error::RELEASE_E2E_TIMEOUT must be minutes from 1 to 350: '$TIMEOUT'"; exit 1; }
+          if [ -n "$ACK_TIMEOUT" ] && ! minutes "$ACK_TIMEOUT"; then
+            echo "::error::RELEASE_E2E_ACK_TIMEOUT must be minutes from 1 to 350, or unset: '$ACK_TIMEOUT'"
             exit 1
           fi
           [[ $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no staged chart digest: '$DIGEST'"; exit 1; }
           echo "waiting for $CONTEXT on $SHA naming the staged chart $DIGEST"
           deadline=$((SECONDS + TIMEOUT * 60))
+          # acknowledged: a status of the context has named this run's chart, whatever its state; without an
+          # acknowledgement timeout nothing waits for one
+          acknowledged=false
+          if [ -n "$ACK_TIMEOUT" ]; then
+            ack_deadline=$((SECONDS + ACK_TIMEOUT * 60))
+          else
+            acknowledged=true
+          fi
           while :; do
             # the newest status of each context on the commit, with its description
             status=$(gh api "repos/$REPO/commits/$SHA/status?per_page=100" \
@@ -331,12 +346,20 @@ jobs:
             else
               seen=${state:-none yet}
             fi
+            if [ -n "$state" ] && [ "$acknowledged" = false ]; then
+              echo "$CONTEXT acknowledged this build: $state: $description"
+              acknowledged=true
+            fi
             case $state in
               success) echo "$CONTEXT: success: $description"; exit 0 ;;
               failure | error) echo "::error::$CONTEXT: $state: $description"; exit 1 ;;
             esac
             if [ "$SECONDS" -ge "$deadline" ]; then
               echo "::error::$CONTEXT did not succeed for this build within $TIMEOUT minutes (last: $seen)"
+              exit 1
+            fi
+            if [ "$acknowledged" = false ] && [ "$SECONDS" -ge "$ack_deadline" ]; then
+              echo "::error::no end-to-end system acknowledged this build within $ACK_TIMEOUT minutes (last: $seen)"
               exit 1
             fi
             echo "$CONTEXT: $seen"

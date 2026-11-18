@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # The release workflow's decisions (.github/workflows/release.yml), against a fake `gh` that answers from fixtures:
 # which version CHANGELOG.md asks to release and whether it is released already (job version), taking the tag (job
-# tag), the image the chart runs (job chart) and waiting for the end-to-end status (job e2e). Runs each step as the
-# workflow has it. Needs bash, jq, yq (mikefarah's) and helm, as GitHub's Ubuntu runners (with setup-helm) and the dev
-# shell have.
+# tag), the image the chart runs (job chart) and waiting for the end-to-end status and its acknowledgement (job e2e).
+# Runs each step as the workflow has it. Needs bash, jq, yq (mikefarah's) and helm, as GitHub's Ubuntu runners (with
+# setup-helm) and the dev shell have.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
@@ -13,7 +13,7 @@ version_step=$(yq -r '.jobs.version.steps[] | select(.id == "version") | .run' "
 tag_step=$(yq -r '.jobs.tag.steps[] | select(.id == "tag") | .run' "$workflow")
 pin_step=$(yq -r '.jobs.chart.steps[] | select(.id == "pin") | .run' "$workflow")
 # without the pauses, and in seconds rather than minutes
-wait_step=$(yq -r '.jobs.e2e.steps[] | select(.id == "wait") | .run' "$workflow" | sed 's/sleep 30/sleep 0.1/; s/TIMEOUT \* 60/TIMEOUT * 1/')
+wait_step=$(yq -r '.jobs.e2e.steps[] | select(.id == "wait") | .run' "$workflow" | sed 's/sleep 30/sleep 0.1/; s/TIMEOUT \* 60/TIMEOUT * 1/g')
 
 mkdir -p "$work/bin"
 cat > "$work/bin/gh" <<'EOF'
@@ -244,10 +244,10 @@ status() { # fixture, n, state or "" for none, [the digest its description names
     echo '{"statuses": [{"context": "other", "state": "success"}]}'
   fi > "$1/status.$2"
 }
-wait_for() { # fixture, env...
+wait_for() { # fixture, env...: the workflow sets RELEASE_E2E_ACK_TIMEOUT's variable, empty when unset
   local dir=$1
   shift
-  run "$dir" "$wait_step" DIGEST="$chart" "$@"
+  run "$dir" "$wait_step" DIGEST="$chart" ACK_TIMEOUT= "$@"
 }
 d=$(fixture)
 expect 'no context set: no wait' '' "$(wait_for "$d" CONTEXT= TIMEOUT=30)"
@@ -282,6 +282,60 @@ d=$(fixture); status "$d" 0 success "$earlier"; status "$d" 1 failure
 expect "an earlier build's success, then this one's failure: fails" failed "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30)"
 
 d=$(fixture); status "$d" 0 success
-expect 'no staged chart digest: fails' failed "$(run "$d" "$wait_step" DIGEST= CONTEXT=e2e TIMEOUT=30)"
+expect 'no staged chart digest: fails' failed "$(run "$d" "$wait_step" DIGEST= CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=)"
+
+# e2e with an acknowledgement timeout: until a status names this run's chart, the wait ends at RELEASE_E2E_ACK_TIMEOUT
+pending() { # fixture, reads: this build's pending for that many reads; prints the next read's number
+  local n
+  for n in $(seq 0 $(($2 - 1))); do status "$1" "$n" pending; done
+  echo "$2"
+}
+said() { # fixture, text: whether the run's log says it
+  grep -qF "$2" "$1/log" && echo true || echo false
+}
+unacknowledged='no end-to-end system acknowledged this build within 1 minutes'
+# 30 reads, at least 3 seconds: past the acknowledgement timeout of 1 (a second here)
+d=$(fixture); status "$d" "$(pending "$d" 30)" success
+expect 'acknowledged, pending past the acknowledgement timeout, then success: go on' '' \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=1)"
+
+d=$(fixture); status "$d" "$(pending "$d" 30)" failure
+expect 'acknowledged, pending past the acknowledgement timeout, then failure: fails' failed \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=1)"
+expect '... with the status' true "$(said "$d" 'e2e: failure: a job ran')"
+
+d=$(fixture); status "$d" 0 pending
+expect 'acknowledged, then nothing more: fails at the timeout' failed \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=3 ACK_TIMEOUT=1)"
+expect '... not at the acknowledgement timeout' true \
+  "$(said "$d" 'did not succeed for this build within 3 minutes (last: pending)')"
+
+d=$(fixture); status "$d" 0 ''
+expect 'never acknowledged: fails at the acknowledgement timeout' failed \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=1)"
+expect '... saying none acknowledged it' true "$(said "$d" "$unacknowledged (last: none yet)")"
+
+d=$(fixture); status "$d" 0 pending "$earlier"
+expect "another build's pending only: fails at the acknowledgement timeout" failed \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=1)"
+expect "... saying it is another build's" true "$(said "$d" "$unacknowledged (last: pending for another build)")"
+
+d=$(fixture); status "$d" 0 ''; status "$d" 1 failure
+expect 'a failure before any pending: fails with it, at once' failed \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=1)"
+expect '... with the status' true "$(said "$d" 'e2e: failure: a job ran')"
+
+d=$(fixture); status "$d" 0 ''; status "$d" 1 success
+expect 'a success before any pending: go on' '' "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=1)"
+
+d=$(fixture); status "$d" 0 ''
+expect 'no acknowledgement timeout, no status: fails at the timeout, as without one' failed \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=2)"
+expect '... not for want of an acknowledgement' true \
+  "$(said "$d" 'did not succeed for this build within 2 minutes (last: none yet)')"
+
+d=$(fixture); status "$d" 0 success
+expect 'an acknowledgement timeout that is not minutes: fails' failed \
+  "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30 ACK_TIMEOUT=5m)"
 
 [ "$failures" -eq 0 ]

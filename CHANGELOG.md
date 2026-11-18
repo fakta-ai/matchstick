@@ -5,6 +5,14 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `RELEASE_E2E_ACK_TIMEOUT`, a repository variable for the release workflow (minutes; unset disables it): when set
+  with `RELEASE_E2E_CONTEXT`, the end-to-end system must acknowledge the build within that time with any status of
+  that context naming the staged chart's digest (`pending` as its test starts, or its result). A release that no
+  end-to-end system acknowledged fails then, saying so, instead of at `RELEASE_E2E_TIMEOUT`; one that was
+  acknowledged waits up to `RELEASE_E2E_TIMEOUT` as before.
+
 ### Changed
 
 - The released chart runs the image released with it by digest: its `image.digest` defaults to that image's manifest

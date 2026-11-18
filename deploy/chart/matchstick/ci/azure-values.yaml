@@ -20,11 +20,15 @@ config:
   pools:
     - name: build
       labels: [linux-x64-large]
+      # A runner group that admits only the repositories that should get the pool's identity; the other pools are
+      # in github.runnerGroup (default).
+      runnerGroup: trusted
       maximum: 3
       maxLifetime: 3h
       azure:
         size: Standard_D16ads_v5
         image: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/images/providers/Microsoft.Compute/galleries/runners/images/runner/versions/1.0.0
+        identity: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/build-runner
         ephemeralOSDisk: ResourceDisk
     - name: untrusted
       maximum: 4

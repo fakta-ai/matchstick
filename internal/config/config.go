@@ -55,7 +55,7 @@ type Listen struct {
 type GitHub struct {
 	// URL is the organisation, repository or enterprise the scale sets belong to, such as https://github.com/acme.
 	URL string `json:"url"`
-	// RunnerGroup is the runner group of the scale sets.
+	// RunnerGroup is the runner group of the scale sets of pools that name none.
 	RunnerGroup string `json:"runnerGroup,omitempty"`
 	// App identifies the GitHub App to sign in as; without it, matchstick signs in with a token.
 	App *App `json:"app,omitempty"`
@@ -81,6 +81,8 @@ type Pool struct {
 	Name string `json:"name"`
 	// Labels are the scale set's labels, which workflows ask for in runs-on; the pool's name if empty.
 	Labels []string `json:"labels,omitempty"`
+	// RunnerGroup is the runner group of the pool's scale set; github.runnerGroup if empty.
+	RunnerGroup string `json:"runnerGroup,omitempty"`
 	// Maximum is the most machines the pool has at once, in any state.
 	Maximum int `json:"maximum"`
 	// Spares is how many idle machines to keep ready beyond demand.
@@ -179,6 +181,9 @@ func (c *Config) applyDefaults() {
 		if len(p.Labels) == 0 {
 			p.Labels = []string{p.Name}
 		}
+		if c.GitHub != nil && p.RunnerGroup == "" {
+			p.RunnerGroup = c.GitHub.RunnerGroup
+		}
 		if p.MaxLifetime == 0 {
 			p.MaxLifetime = plan.Duration(DefaultMaxLifetime)
 		}
@@ -233,6 +238,7 @@ func (c *Config) validate() error {
 		check(naming.ValidPool(p.Name, maxPoolLength),
 			"pool %q: lower-case letters, digits and inner hyphens, starting with a letter, at most %d characters",
 			p.Name, maxPoolLength)
+		check(p.RunnerGroup == "" || c.GitHub != nil, "pool %s: runnerGroup needs github", p.Name)
 		check(!seen[p.Name], "pool %q appears twice", p.Name)
 		seen[p.Name] = true
 		check(p.Maximum >= 0, "pool %s: maximum must not be negative", p.Name)

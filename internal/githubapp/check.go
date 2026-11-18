@@ -43,8 +43,19 @@ type Report struct {
 	// InstallationID is the App's installation on the configured owner, once found.
 	InstallationID int64 `json:"installationID,omitempty" jsonschema:"the App's installation on the configured organisation or repository, once found"`
 	// RunnerGroupID is the configured runner group's ID, once found.
-	RunnerGroupID int64   `json:"runnerGroupID,omitempty" jsonschema:"the configured runner group's ID, on an organisation, once found"`
+	RunnerGroupID int64   `json:"runnerGroupID,omitempty" jsonschema:"github.runnerGroup's ID, on an organisation, once found"`
 	Checks        []Check `json:"checks" jsonschema:"one entry per check: key, installation, permissions, runnerGroup"`
+	// RunnerGroups is the runnerGroup check, group by group.
+	RunnerGroups []GroupCheck `json:"runnerGroups" jsonschema:"one entry per runner group the configuration names, github.runnerGroup first; the runnerGroup check passes when each does"`
+}
+
+// GroupCheck is one runner group's part of the runnerGroup check.
+type GroupCheck struct {
+	Name   string   `json:"name" jsonschema:"the runner group, as the configuration names it"`
+	ID     int64    `json:"id,omitempty" jsonschema:"its ID, on an organisation, once found"`
+	Pools  []string `json:"pools" jsonschema:"the pools whose scale sets go in it"`
+	Status Status   `json:"status" jsonschema:"pass, fail, or skipped when an earlier check's failure leaves nothing to check"`
+	Detail string   `json:"detail" jsonschema:"what was found, and on failure what to change"`
 }
 
 // Failure reports the failed checks, if any.
@@ -93,6 +104,8 @@ type Observed struct {
 	ConfiguredInstallation int64
 	// RunnerGroup is the configuration's github.runnerGroup.
 	RunnerGroup string
+	// PoolGroups is each pool's runner group, in the configuration's order.
+	PoolGroups []PoolGroup
 
 	// App, or AppErr: GET /app, signed with the App's JWT.
 	App    *AppInfo
@@ -106,10 +119,17 @@ type Observed struct {
 	GroupsErr error
 }
 
+// PoolGroup is a pool and the runner group of its scale set.
+type PoolGroup struct {
+	Pool        string
+	RunnerGroup string
+}
+
 // Evaluate judges what was observed: one entry per check, in order.
 func Evaluate(o Observed) Report {
 	r := Report{Checks: []Check{key(o), installation(o)}}
-	r.Checks = append(r.Checks, permissions(o, r.Checks[1]), runnerGroup(o, r.Checks[1]))
+	r.RunnerGroups = groupChecks(o, r.Checks[1])
+	r.Checks = append(r.Checks, permissions(o, r.Checks[1]), runnerGroup(r.RunnerGroups))
 	if o.App != nil {
 		r.App = o.App.Slug
 	}
@@ -194,36 +214,74 @@ func permissions(o Observed, inst Check) Check {
 	return c
 }
 
-func runnerGroup(o Observed, inst Check) Check {
-	c := Check{Name: CheckRunnerGroup}
+// groupChecks checks each runner group the configuration names: github.runnerGroup first, then the pools' other
+// groups in the order the pools name them. Names that differ only in case are one group, as on GitHub.
+func groupChecks(o Observed, inst Check) []GroupCheck {
+	groups := []GroupCheck{{Name: o.RunnerGroup, Pools: []string{}}}
+	for _, p := range o.PoolGroups {
+		i := slices.IndexFunc(groups, func(g GroupCheck) bool { return strings.EqualFold(g.Name, p.RunnerGroup) })
+		if i < 0 {
+			groups = append(groups, GroupCheck{Name: p.RunnerGroup, Pools: []string{}})
+			i = len(groups) - 1
+		}
+		groups[i].Pools = append(groups[i].Pools, p.Pool)
+	}
+	for i := range groups {
+		groups[i].Status, groups[i].Detail = groupCheck(o, inst, groups[i].Name)
+		if g := findGroup(o.Groups, groups[i].Name); g != nil && o.Target.Kind == Organization {
+			groups[i].ID = g.ID
+		}
+	}
+	return groups
+}
+
+// groupCheck checks that one runner group exists and the App can use it.
+func groupCheck(o Observed, inst Check, name string) (Status, string) {
 	switch {
-	case o.Target.Kind == Repository && strings.EqualFold(o.RunnerGroup, "default"):
-		c.Status, c.Detail = Pass, "a repository's runners belong to its default runner group"
+	case o.Target.Kind == Repository && strings.EqualFold(name, "default"):
+		return Pass, "a repository's runners belong to its default runner group"
 	case o.Target.Kind == Repository:
-		c.Status, c.Detail = Fail, fmt.Sprintf("runner groups belong to organisations; a repository's runners "+
-			"belong to its default group, so set github.runnerGroup to default, not %q", o.RunnerGroup)
+		return Fail, fmt.Sprintf("runner groups belong to organisations; a repository's runners belong to its "+
+			"default group, so leave github.runnerGroup and the pools' runnerGroup at default, not %q", name)
 	case o.Target.Kind != Organization:
-		c.Status, c.Detail = Skipped, "not checked: "+inst.Name+" "+string(inst.Status)
+		return Skipped, "not checked: " + inst.Name + " " + string(inst.Status)
 	case hasStatus(o.GroupsErr, http.StatusForbidden) || hasStatus(o.GroupsErr, http.StatusNotFound):
-		c.Status, c.Detail = Fail, fmt.Sprintf("the installation cannot read %s's runner groups (%v): it needs "+
+		return Fail, fmt.Sprintf("the installation cannot read %s's runner groups (%v): it needs "+
 			"organization_self_hosted_runners", o.Target.Owner, o.GroupsErr)
 	case o.GroupsErr != nil:
-		c.Status, c.Detail = Fail, o.GroupsErr.Error()
+		return Fail, o.GroupsErr.Error()
 	case o.Groups == nil:
-		c.Status, c.Detail = Skipped, "not checked: "+inst.Name+" "+string(inst.Status)
-	default:
-		g := findGroup(o.Groups, o.RunnerGroup)
-		if g == nil {
-			names := make([]string, 0, len(o.Groups))
-			for _, g := range o.Groups {
-				names = append(names, g.Name)
-			}
-			c.Status, c.Detail = Fail, fmt.Sprintf("%s has no runner group %q that the App can use; it can use: %s",
-				o.Target.Owner, o.RunnerGroup, strings.Join(names, ", "))
-			break
-		}
-		c.Status, c.Detail = Pass, fmt.Sprintf("runner group %s (ID %d) is one the App can use", g.Name, g.ID)
+		return Skipped, "not checked: " + inst.Name + " " + string(inst.Status)
 	}
+	g := findGroup(o.Groups, name)
+	if g == nil {
+		names := make([]string, 0, len(o.Groups))
+		for _, g := range o.Groups {
+			names = append(names, g.Name)
+		}
+		return Fail, fmt.Sprintf("%s has no runner group %q that the App can use; it can use: %s", o.Target.Owner,
+			name, strings.Join(names, ", "))
+	}
+	return Pass, fmt.Sprintf("runner group %s (ID %d) is one the App can use", g.Name, g.ID)
+}
+
+// runnerGroup sums the groups' checks up: failed if one failed, skipped if all were, passed otherwise. Its detail is
+// the details of the groups that decided it, each once.
+func runnerGroup(groups []GroupCheck) Check {
+	c := Check{Name: CheckRunnerGroup, Status: Pass}
+	switch {
+	case slices.ContainsFunc(groups, func(g GroupCheck) bool { return g.Status == Fail }):
+		c.Status = Fail
+	case !slices.ContainsFunc(groups, func(g GroupCheck) bool { return g.Status != Skipped }):
+		c.Status = Skipped
+	}
+	var details []string
+	for _, g := range groups {
+		if (g.Status == c.Status || c.Status == Pass) && !slices.Contains(details, g.Detail) {
+			details = append(details, g.Detail)
+		}
+	}
+	c.Detail = strings.Join(details, "; ")
 	return c
 }
 

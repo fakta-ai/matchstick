@@ -17,6 +17,9 @@ azure:
 pools:
   - name: build
     labels: [linux-x64-large]
+    # Its VMs carry an identity: a runner group that admits only the repositories that should get it. Pools that
+    # name no runnerGroup are in github.runnerGroup.
+    runnerGroup: trusted
     maximum: 3
     maxLifetime: 3h
     azure:

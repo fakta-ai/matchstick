@@ -51,8 +51,9 @@ func githubAppOperations() []*op.Operation {
 			"Check the GitHub App that run signs in as, with the same configuration and secret mount. It checks "+
 				"that GitHub accepts a JWT signed with the key (key); the App is installed on github.url's organisation or "+
 				"repository, with the installation ID in the configuration (installation); the installation has the "+
-				"permissions matchstick needs (permissions); github.runnerGroup exists and the App can use it "+
-				"(runnerGroup). One entry per check; exits 1 when any check fails. Changes nothing on GitHub.",
+				"permissions matchstick needs (permissions); github.runnerGroup and every pool's runnerGroup exist "+
+				"and the App can use them (runnerGroup, and runnerGroups group by group, with the pools in each). "+
+				"One entry per check; exits 1 when any check fails. Changes nothing on GitHub.",
 			"matchstick github-app check --config matchstick.yaml --secrets-dir secrets",
 			op.Annotations{ReadOnly: true, Idempotent: true, OpenWorld: true},
 			checkApp),
@@ -100,8 +101,12 @@ func checkApp(ctx context.Context, in AppCheckInput) (githubapp.Report, error) {
 		return githubapp.Report{}, op.Errorf(op.CodeInvalidConfig,
 			"the secret mount holds a token, not the App's key (github-app-private-key)")
 	}
+	pools := make([]githubapp.PoolGroup, 0, len(cfg.Pools))
+	for _, p := range cfg.Pools {
+		pools = append(pools, githubapp.PoolGroup{Pool: p.Name, RunnerGroup: p.RunnerGroup})
+	}
 	observed := githubapp.Gather(ctx, t, github.Credentials{AppClientID: cfg.GitHub.App.ClientID,
 		AppInstallationID: cfg.GitHub.App.InstallationID, AppPrivateKey: creds.AppPrivateKey},
-		cfg.GitHub.RunnerGroup, now())
+		cfg.GitHub.RunnerGroup, pools, now())
 	return githubapp.Evaluate(observed), nil
 }

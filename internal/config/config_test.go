@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"strings"
 	"testing"
 	"time"
@@ -65,5 +66,36 @@ func TestFakeReplacesGitHubAndAzure(t *testing.T) {
 	_, err = Parse([]byte("instance: ci\nfake: {pools: {}}\npools: [{name: build, maximum: 2}]\n"))
 	if err == nil || !strings.Contains(err.Error(), "fake.pools") {
 		t.Errorf("error = %v, want a missing fake pool", err)
+	}
+}
+
+func TestPoolsRunnerGroups(t *testing.T) {
+	pools := `
+  - {name: deploy, runnerGroup: deploy, maximum: 1, azure: {size: s, image: i}}
+  - {name: release, runnerGroup: deploy, maximum: 1, azure: {size: s, image: i}}
+  - {name: test, maximum: 1, azure: {size: s, image: i}}
+`
+	for _, tc := range []struct{ github, want string }{
+		{"", "default"},
+		{", runnerGroup: ci", "ci"},
+	} {
+		cfg := strings.Replace(azure, "installationID: 7}", "installationID: 7}"+tc.github, 1)
+		c, err := Parse([]byte(strings.Replace(cfg, "pools:\n", "pools:"+pools, 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{}
+		for _, p := range c.Pools {
+			got[p.Name] = p.RunnerGroup
+		}
+		want := map[string]string{"deploy": "deploy", "release": "deploy", "test": tc.want, "build": tc.want}
+		if !maps.Equal(got, want) {
+			t.Errorf("github%s: groups %v, want %v", tc.github, got, want)
+		}
+	}
+	_, err := Parse([]byte("instance: ci\nfake: {pools: {build: {}}}\n" +
+		"pools: [{name: build, maximum: 2, runnerGroup: deploy}]\n"))
+	if err == nil || !strings.Contains(err.Error(), "runnerGroup needs github") {
+		t.Errorf("error = %v, want runnerGroup refused without github", err)
 	}
 }

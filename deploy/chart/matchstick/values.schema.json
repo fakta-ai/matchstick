@@ -138,7 +138,7 @@
           "required": ["url"],
           "properties": {
             "url": {"type": "string", "pattern": "^https?://"},
-            "runnerGroup": {"type": "string"},
+            "runnerGroup": {"type": "string", "description": "The runner group of the scale sets of pools that name none; default if empty."},
             "app": {
               "type": "object",
               "additionalProperties": false,
@@ -183,6 +183,7 @@
       "properties": {
         "name": {"type": "string", "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$", "maxLength": 20},
         "labels": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "runnerGroup": {"type": "string", "description": "The runner group of the pool's scale set; github.runnerGroup if empty. Only with github."},
         "maximum": {"type": "integer", "minimum": 0},
         "spares": {"type": "integer", "minimum": 0},
         "maxLifetime": {"$ref": "#/definitions/duration"},

@@ -316,6 +316,9 @@ matchstick github-app check --config matchstick.yaml --secrets-dir secrets
     {"name": "installation", "status": "pass", "detail": "App acme-runners is installed on acme as installation 56789012"},
     {"name": "permissions", "status": "pass", "detail": "the installation has metadata: read, organization_self_hosted_runners: write"},
     {"name": "runnerGroup", "status": "pass", "detail": "runner group Default (ID 1) is one the App can use"}
+  ],
+  "runnerGroups": [
+    {"name": "default", "id": 1, "pools": ["linux"], "status": "pass", "detail": "runner group Default (ID 1) is one the App can use"}
   ]
 }
 ```
@@ -374,3 +377,42 @@ registers, takes the job, and the VM powers off and is deleted. `matchstick stat
 A pool's scale set is visible to the runner group's repositories. On an organisation, the `default` group serves its
 private repositories; to serve public repositories, or to limit which repositories may use the runners, change the
 group's settings under **Settings → Actions → Runner groups**.
+
+## Pools in a runner group of their own
+
+A runner group decides which repositories may use its runners. A pool whose VMs carry an identity (`azure.identity`)
+gives every job on them what that identity may do, so put such a pool in a group that admits only the repositories
+that should have it, and leave the other pools in a group that admits more.
+
+1. In GitHub, under the organisation's **Settings → Actions → Runner groups**, select **New runner group**, name it
+   (here `deploy`), and under **Repository access** choose **Selected repositories** and select them. matchstick
+   neither creates nor changes runner groups.
+2. Name the group on the pool, under `config.pools` in `values.yaml`; pools that name none stay in
+   `github.runnerGroup`:
+
+   ```yaml
+   pools:
+     - name: linux
+       labels: [acme-linux]
+       maximum: 4
+       azure: {...}
+     - name: deploy
+       labels: [acme-deploy]
+       runnerGroup: deploy
+       maximum: 2
+       azure:
+         size: Standard_D4ads_v5
+         image: /subscriptions/<subscription-id>/resourceGroups/acme-images/providers/Microsoft.Compute/galleries/acme-gallery/images/runner
+         identity: /subscriptions/<subscription-id>/resourceGroups/acme-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/deploy
+   ```
+
+3. Check it: `matchstick github-app check` checks every group the configuration names and lists, under
+   `runnerGroups`, each group with its pools; a group missing or one the App cannot use fails the check.
+4. Upgrade the release (`helm upgrade` with the new values). On start, matchstick creates the pool's scale set in
+   its group or, for a pool that was in another group, moves its scale set there, keeping its runners and the jobs
+   assigned to it. `matchstick status` shows each pool's `runnerGroup`.
+
+If the group is missing or the App cannot use it, that pool creates no machines and its log says why
+(`the pool cannot scale until its scale set is in its runner group`) and its `matchstick_listening` stays 0, retrying
+every 2 minutes at most; the other pools are not affected. [configuration.md](configuration.md#runner-groups) has
+the details, and [operations.md](operations.md#watching) an alert for a pool that is not listening.

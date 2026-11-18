@@ -5,6 +5,24 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- A pool can name its own runner group, `pools[].runnerGroup`; a pool that names none stays in `github.runnerGroup`.
+  A pool whose VMs carry an identity can so sit in a group that admits only the repositories that should get it.
+  When a pool's group changes, `run` moves its scale set to the new group, keeping the scale set's ID, runners and
+  assigned jobs.
+- `github-app check` checks every runner group the configuration names and reports each, with its pools, in the new
+  `runnerGroups` field; `status` reports each pool's `runnerGroup`.
+- `matchstick_listening{pool}`: 1 while the pool's listener holds a message session for its scale set, 0 before the
+  first and between sessions, so an alert can see a pool whose jobs queue with nobody listening, such as
+  `max_over_time(matchstick_listening[10m]) == 0`.
+
+### Changed
+
+- `run` no longer stops when a pool's scale set cannot be found, created or moved (a runner group missing or refused,
+  GitHub unreachable): that pool creates no machines and logs why, trying again after 5 seconds up to every 2
+  minutes, while the other pools run; its `matchstick_listening` stays 0.
+
 ### Fixed
 
 - The log no longer gets `http: TLS handshake error from <address>: EOF` every few seconds when the claim endpoint is

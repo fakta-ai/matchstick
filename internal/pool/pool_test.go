@@ -579,3 +579,17 @@ func TestRunStopsWithItsContext(t *testing.T) {
 		t.Fatal("Run did not stop")
 	}
 }
+
+func TestListeningIsAGaugeOfThePool(t *testing.T) {
+	w := newWorld(t)
+	for _, on := range []bool{false, true, false} {
+		w.pool.SetListening(on)
+		want := 0.0
+		if on {
+			want = 1
+		}
+		if got := testutil.ToFloat64(w.metrics.Listening.WithLabelValues(settings.Name)); got != want {
+			t.Errorf("after SetListening(%v): matchstick_listening = %v, want %v", on, got, want)
+		}
+	}
+}

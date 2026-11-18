@@ -2,7 +2,8 @@ image:
   repository: ghcr.io/fakta-ai/matchstick
   # Defaults to the chart's appVersion.
   tag: ""
-  # sha256:..., which pins the image exactly; when set, tag is ignored.
+  # sha256:..., which pins the image exactly; when set, tag is ignored. A released chart sets it to the image released
+  # with it; set "" to run the tag instead.
   digest: ""
   pullPolicy: IfNotPresent
 

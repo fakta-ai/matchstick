@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The release workflow's decisions (.github/workflows/release.yml), against a fake `gh` that answers from fixtures:
 # which version CHANGELOG.md asks to release and whether it is released already (job version), taking the tag (job
-# tag), and waiting for the end-to-end status (job e2e). Runs each step as the workflow has it. Needs bash, jq and yq
-# (mikefarah's), as GitHub's Ubuntu runners and the dev shell have.
+# tag), the image the chart runs (job chart) and waiting for the end-to-end status (job e2e). Runs each step as the
+# workflow has it. Needs bash, jq, yq (mikefarah's) and helm, as GitHub's Ubuntu runners (with setup-helm) and the dev
+# shell have.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
@@ -10,6 +11,7 @@ trap 'rm -rf "$work"' EXIT
 workflow=$root/.github/workflows/release.yml
 version_step=$(yq -r '.jobs.version.steps[] | select(.id == "version") | .run' "$workflow")
 tag_step=$(yq -r '.jobs.tag.steps[] | select(.id == "tag") | .run' "$workflow")
+pin_step=$(yq -r '.jobs.chart.steps[] | select(.id == "pin") | .run' "$workflow")
 # without the pauses, and in seconds rather than minutes
 wait_step=$(yq -r '.jobs.e2e.steps[] | select(.id == "wait") | .run' "$workflow" | sed 's/sleep 30/sleep 0.1/; s/TIMEOUT \* 60/TIMEOUT * 1/')
 
@@ -220,33 +222,66 @@ expect 'a version another run tagged meanwhile stops quietly' ok=false "$(run "$
 d=$(fixture); touch "$d/refuse"
 expect 'a refused tag fails' failed "$(run "$d" "$tag_step" VERSION=0.4.0)"
 
-# e2e
-status() { # fixture, n, state or "" for none
+# chart: the packaged chart runs the staged image's digest under the image's public name
+image=sha256:$(printf 'a%.0s' $(seq 64))
+d=$(fixture); mkdir -p "$d/deploy/chart"; cp -R "$root/deploy/chart/matchstick" "$d/deploy/chart/"
+expect 'the chart pins the staged image' '' "$(run "$d" "$pin_step" DIGEST="$image" GITHUB_STEP_SUMMARY="$d/summary")"
+expect '... and runs it by digest under its public name' "ghcr.io/fakta-ai/matchstick@$image" \
+  "$(helm template matchstick "$d/deploy/chart/matchstick" |
+    yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].image')"
+
+d=$(fixture); mkdir -p "$d/deploy/chart"; cp -R "$root/deploy/chart/matchstick" "$d/deploy/chart/"
+expect 'no staged image digest: fails' failed "$(run "$d" "$pin_step" DIGEST= GITHUB_STEP_SUMMARY="$d/summary")"
+
+# e2e: a status counts only when its description names the staged chart's digest
+chart=sha256:$(printf 'c%.0s' $(seq 64))
+earlier=sha256:$(printf 'e%.0s' $(seq 64))
+status() { # fixture, n, state or "" for none, [the digest its description names; this run's chart by default]
   if [ -n "$3" ]; then
-    jq -n --arg state "$3" '{statuses: [{context: "other", state: "failure"}, {context: "e2e", state: $state}]}'
+    jq -n --arg state "$3" --arg description "a job ran; chart ${4:-$chart}" \
+      '{statuses: [{context: "other", state: "failure"}, {context: "e2e", state: $state, description: $description}]}'
   else
     echo '{"statuses": [{"context": "other", "state": "success"}]}'
   fi > "$1/status.$2"
 }
+wait_for() { # fixture, env...
+  local dir=$1
+  shift
+  run "$dir" "$wait_step" DIGEST="$chart" "$@"
+}
 d=$(fixture)
-expect 'no context set: no wait' '' "$(run "$d" "$wait_step" CONTEXT= TIMEOUT=30)"
+expect 'no context set: no wait' '' "$(wait_for "$d" CONTEXT= TIMEOUT=30)"
 
 d=$(fixture); status "$d" 0 success
-expect 'the status succeeded: go on' '' "$(run "$d" "$wait_step" CONTEXT=e2e TIMEOUT=30)"
+expect 'the status succeeded: go on' '' "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30)"
 
 d=$(fixture); status "$d" 0 ''; status "$d" 1 pending; status "$d" 2 success
-expect 'none, then pending, then success: go on' '' "$(run "$d" "$wait_step" CONTEXT=e2e TIMEOUT=30)"
+expect 'none, then pending, then success: go on' '' "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30)"
 
 d=$(fixture); status "$d" 0 pending; status "$d" 1 failure
-expect 'pending, then failure: fails' failed "$(run "$d" "$wait_step" CONTEXT=e2e TIMEOUT=30)"
+expect 'pending, then failure: fails' failed "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30)"
 
 d=$(fixture); status "$d" 0 error
-expect 'error: fails' failed "$(run "$d" "$wait_step" CONTEXT=e2e TIMEOUT=30)"
+expect 'error: fails' failed "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30)"
 
 d=$(fixture); status "$d" 0 pending
-expect 'pending until the timeout: fails' failed "$(run "$d" "$wait_step" CONTEXT=e2e TIMEOUT=1)"
+expect 'pending until the timeout: fails' failed "$(wait_for "$d" CONTEXT=e2e TIMEOUT=1)"
 
 d=$(fixture); status "$d" 0 success
-expect 'a timeout that is not minutes: fails' failed "$(run "$d" "$wait_step" CONTEXT=e2e TIMEOUT=10m)"
+expect 'a timeout that is not minutes: fails' failed "$(wait_for "$d" CONTEXT=e2e TIMEOUT=10m)"
+
+d=$(fixture); status "$d" 0 success "$earlier"
+expect "an earlier build's success only: fails at the timeout" failed "$(wait_for "$d" CONTEXT=e2e TIMEOUT=1)"
+expect "... saying it is another build's" true \
+  "$(grep -q 'success for another build' "$d/log" && echo true || echo false)"
+
+d=$(fixture); status "$d" 0 failure "$earlier"; status "$d" 1 pending; status "$d" 2 success
+expect "an earlier build's failure, then this one's success: go on" '' "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30)"
+
+d=$(fixture); status "$d" 0 success "$earlier"; status "$d" 1 failure
+expect "an earlier build's success, then this one's failure: fails" failed "$(wait_for "$d" CONTEXT=e2e TIMEOUT=30)"
+
+d=$(fixture); status "$d" 0 success
+expect 'no staged chart digest: fails' failed "$(run "$d" "$wait_step" DIGEST= CONTEXT=e2e TIMEOUT=30)"
 
 [ "$failures" -eq 0 ]

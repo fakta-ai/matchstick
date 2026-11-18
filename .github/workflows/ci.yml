@@ -106,7 +106,7 @@ jobs:
           [ -z "$refused" ] || { echo "::error::label values Kubernetes refuses: $refused"; exit 1; }
 
   # the workflows' own decisions, against fixtures: the review gate's one exception (Dependabot's flake.lock-only pull
-  # requests) and the release's (which version, the tag, the end-to-end wait)
+  # requests) and the release's (which version, the tag, the image the chart runs, the end-to-end wait)
   workflows:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -114,6 +114,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # the release's chart test renders the chart
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
       # the runner has bash, jq and yq
       - run: bash .github/tests/codex.sh
       - run: bash .github/tests/release.sh

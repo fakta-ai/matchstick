@@ -5,6 +5,14 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The released chart runs the image released with it by digest: its `image.digest` defaults to that image's manifest
+  digest, so a chart whose signature checks out also fixes the image it runs, and `image.tag` is ignored unless
+  `image.digest` is set to `""`. The release checks that the published chart names the published image.
+- A release waits only for an end-to-end status whose description names the staged chart's digest; a status left on
+  the same commit by an earlier run no longer counts.
+
 ## [0.6.0] - 2026-11-18
 
 ### Added

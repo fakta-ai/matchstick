@@ -73,16 +73,21 @@ same CI run (`.github/workflows/release.yml`):
 2. builds everything once (`.goreleaser.yaml`): the binaries, their SBOMs and the signed `checksums.txt` into a draft
    release, and the image and the chart into staging repositories only, `ghcr.io/fakta-ai/matchstick-staging` and
    `ghcr.io/fakta-ai/charts-staging/matchstick`, each tagged with the version, signed, with SBOMs, and with build
-   provenance once the repository is public;
+   provenance once the repository is public. The chart's default image is the staged image's digest under its public
+   name, `ghcr.io/fakta-ai/matchstick@sha256:…`;
 3. when the repository variable `RELEASE_E2E_CONTEXT` is set, waits for the commit status with that context on the
-   release's commit to be `success`, for at most `RELEASE_E2E_TIMEOUT` minutes (30 by default). An end-to-end system
-   runs a real job with the staged image and chart (their digests are in the run's summary) and sets that status.
-   A failure or timeout ends the run, with the draft and the staged images left as they are;
+   release's commit to be `success` with a description that names the staged chart's digest, for at most
+   `RELEASE_E2E_TIMEOUT` minutes (30 by default). An end-to-end system installs the staged chart with
+   `image.repository` set to `ghcr.io/fakta-ai/matchstick-staging`, runs a real job on a machine it makes, and sets
+   that status, naming the chart's digest (the digests are in the run's summary). A status naming another digest is
+   about an earlier build of the same commit and doesn't count. A failure or timeout ends the run, with the draft and
+   the staged images left as they are;
 4. copies the staged image and chart, by digest, with their signatures, SBOMs and attestations, to
    `ghcr.io/fakta-ai/matchstick:<version>` and `ghcr.io/fakta-ai/charts/matchstick:<version>`;
 5. publishes the draft release;
-6. verifies, from the public names, the signatures, the digests, the files against `checksums.txt`, the provenance
-   once public, and that the image runs and reports the version. A failed check fails the run; nothing is undone.
+6. verifies, from the public names, the signatures, the digests, that the chart runs the image by its digest, the
+   files against `checksums.txt`, the provenance once public, and that the image runs and reports the version. A
+   failed check fails the run; nothing is undone.
 
 A version whose run failed after tagging is not built again by later commits: the next release takes the next
 version. Re-running the failed jobs of that run continues it.

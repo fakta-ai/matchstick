@@ -14,7 +14,7 @@ govulncheck ./...
 helm lint deploy/chart/matchstick
 helm lint deploy/chart/matchstick --values deploy/chart/matchstick/ci/azure-values.yaml
 bash .github/tests/codex.sh    # the review gate: Dependabot's flake.lock-only pull requests pass without a review
-bash .github/tests/release.sh  # the release's decisions: which version, the tag, the end-to-end wait
+bash .github/tests/release.sh  # the release's decisions: which version, the tag, the chart's image, the end-to-end wait
 # what a release builds, published nowhere (needs syft, and Docker for the image)
 go run github.com/goreleaser/goreleaser/v2@v2.19.0 release --snapshot --clean --skip=sign
 ```
@@ -75,7 +75,8 @@ only `flake.lock` merges by itself once `check` passes.
   heading. Nobody tags: once it merges and `check` passes, the same CI run (`.github/workflows/release.yml`) tags the
   commit `vx.y.z`, builds everything once with GoReleaser (`.goreleaser.yaml`) into a draft release and staging
   registries (`ghcr.io/fakta-ai/matchstick-staging`, `ghcr.io/fakta-ai/charts-staging/matchstick`), signed and with
-  SBOMs, waits for the end-to-end status when `RELEASE_E2E_CONTEXT` is set, copies the staged digests to the public
-  names, publishes the draft, and verifies what it published. Signatures are Sigstore's, keyless, by
+  SBOMs, the chart's default image the staged image's digest; waits, when `RELEASE_E2E_CONTEXT` is set, for an
+  end-to-end status on the commit whose description names the staged chart's digest; copies the staged digests to the
+  public names, publishes the draft, and verifies what it published. Signatures are Sigstore's, keyless, by
   `release.yml@refs/heads/main`; build provenance attestations are added once the repository is public. The image's
   base is pinned by digest in `.goreleaser.yaml` and moved by hand.

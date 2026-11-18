@@ -44,7 +44,8 @@ gh attestation verify oci://ghcr.io/fakta-ai/charts/matchstick@sha256:<digest> -
 ```
 
 Flux checks the chart itself when its `OCIRepository` has `verify.provider: cosign` with that issuer and identity
-(`matchOIDCIdentity`); pin the image with the chart's `image.digest`.
+(`matchOIDCIdentity`). A released chart runs its release's image by digest (below), so a chart whose signature checks
+out also fixes the image it runs.
 
 ## Running
 
@@ -57,10 +58,15 @@ time: the next start finds every machine and registration again. Machines still 
 their runner configuration, which only the old process held: they power off, and the new process deletes them and
 creates replacements as jobs need them.
 
-On Kubernetes, the chart in `deploy/chart/matchstick` runs it that way. Its image is
-`<image.repository>:<image.tag>`, the tag defaulting to the chart's `appVersion`. To run exactly the image you
-checked, pin it by digest: set `image.digest` to the image's manifest digest, `sha256:` followed by 64 hexadecimal
-digits. The pod then runs `<image.repository>@<image.digest>`, and `image.tag` is ignored.
+Two installations can share a GitHub organisation, a cloud account and a GitHub App, such as one that takes a new
+version first: each has its own `instance` and its own claim endpoint, and each label belongs to one installation's
+pools only, or a job asking for it may land on either.
+
+On Kubernetes, the chart in `deploy/chart/matchstick` runs it that way. A released chart's image is
+`<image.repository>@<image.digest>`, its `image.digest` defaulting to the manifest digest of the image released with
+it: the pod runs exactly that image, and `image.tag` is ignored. To run another image with it, set `image.digest` to
+that image's digest, or to `""` to run `<image.repository>:<image.tag>`, the tag defaulting to the chart's
+`appVersion`. The chart in this repository has no digest of its own; give it one:
 
 ```sh
 helm upgrade --install matchstick deploy/chart/matchstick -f values.yaml \

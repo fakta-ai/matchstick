@@ -5,11 +5,14 @@
 # 2. tag: tags this commit vx.y.z;
 # 3. goreleaser, chart: build everything once. The binaries, their SBOMs and signed checksums.txt go to a draft
 #    release; the image (ghcr.io/fakta-ai/matchstick-staging) and the chart (ghcr.io/fakta-ai/charts-staging/matchstick)
-#    go to staging repositories only, signed, with SBOMs, and with build provenance once the repository is public;
+#    go to staging repositories only, signed, with SBOMs, and with build provenance once the repository is public. The
+#    chart's default image is that image's digest, under its public name, so the chart's signature covers the image it
+#    runs;
 # 4. e2e: when the repository variable RELEASE_E2E_CONTEXT is set, waits until the commit status with that context on
-#    this commit is success (at most RELEASE_E2E_TIMEOUT minutes, 30 by default): an end-to-end system runs a real job
-#    with the staged image and chart and reports it there. Failure or timeout ends the run; the draft and the staged
-#    digests stay;
+#    this commit is success and its description names the staged chart's digest (at most RELEASE_E2E_TIMEOUT minutes,
+#    30 by default): an end-to-end system installs the staged chart (with the image's repository set to the staging
+#    one), runs a real job with it and reports it there. A status naming another digest is an earlier run's and
+#    doesn't count. Failure or timeout ends the run; the draft and the staged digests stay;
 # 5. promote: copies the staged image and chart, by digest and with their signatures, SBOMs and attestations, to
 #    ghcr.io/fakta-ai/matchstick:<version> and ghcr.io/fakta-ai/charts/matchstick:<version>;
 # 6. publish: publishes the draft, its notes the version's section of CHANGELOG.md with both digests;
@@ -215,9 +218,10 @@ jobs:
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
 
-  # the staged chart, its version and appVersion the release's, so its default image is this release's; signed
+  # the staged chart, its version and appVersion the release's, its default image the staged image's digest under the
+  # image's public name, so its signature covers the image it runs; signed
   chart:
-    needs: [version, tag]
+    needs: [version, tag, goreleaser]
     if: needs.tag.outputs.ok == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -251,6 +255,18 @@ jobs:
           set -euo pipefail
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
           echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+      # the image the chart runs unless told otherwise: the staged image's digest (image.digest wins over image.tag),
+      # under the public name the release copies it to (values.yaml's image.repository)
+      - name: pin the image
+        id: pin
+        env:
+          DIGEST: ${{ needs.goreleaser.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [[ $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no staged image digest: '$DIGEST'"; exit 1; }
+          yq -i '.image.digest = strenv(DIGEST)' deploy/chart/matchstick/values.yaml
+          echo "The chart's image: \`$(yq '.image.repository + "@" + .image.digest' deploy/chart/matchstick/values.yaml)\`" \
+            >> "$GITHUB_STEP_SUMMARY"
       - name: push
         id: push
         run: |
@@ -287,6 +303,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
+          DIGEST: ${{ needs.chart.outputs.digest }}
           CONTEXT: ${{ vars.RELEASE_E2E_CONTEXT }}
           TIMEOUT: ${{ vars.RELEASE_E2E_TIMEOUT || '30' }}
         run: |
@@ -299,20 +316,30 @@ jobs:
             echo "::error::RELEASE_E2E_TIMEOUT must be minutes from 1 to 350: '$TIMEOUT'"
             exit 1
           fi
+          [[ $DIGEST =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::no staged chart digest: '$DIGEST'"; exit 1; }
+          echo "waiting for $CONTEXT on $SHA naming the staged chart $DIGEST"
           deadline=$((SECONDS + TIMEOUT * 60))
           while :; do
-            # the newest status of each context on the commit
-            state=$(gh api "repos/$REPO/commits/$SHA/status?per_page=100" \
-              --jq '.statuses[] | select(.context == env.CONTEXT) | .state')
+            # the newest status of each context on the commit, with its description
+            status=$(gh api "repos/$REPO/commits/$SHA/status?per_page=100" \
+              --jq '.statuses[] | select(.context == env.CONTEXT) | "\(.state) \(.description // "")"')
+            state=${status%% *} description=${status#* }
+            # a status that doesn't name this run's chart is about an earlier build of this commit
+            if [ -n "$status" ] && [[ $description != *"$DIGEST"* ]]; then
+              seen="$state for another build"
+              state=''
+            else
+              seen=${state:-none yet}
+            fi
             case $state in
-              success) echo "$CONTEXT: success"; exit 0 ;;
-              failure | error) echo "::error::$CONTEXT: $state"; exit 1 ;;
+              success) echo "$CONTEXT: success: $description"; exit 0 ;;
+              failure | error) echo "::error::$CONTEXT: $state: $description"; exit 1 ;;
             esac
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::$CONTEXT did not succeed within $TIMEOUT minutes (last state: ${state:-none})"
+              echo "::error::$CONTEXT did not succeed for this build within $TIMEOUT minutes (last: $seen)"
               exit 1
             fi
-            echo "$CONTEXT: ${state:-none yet}"
+            echo "$CONTEXT: $seen"
             sleep 30
           done
 
@@ -397,14 +424,20 @@ jobs:
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         with:
           cosign-release: v3.1.4
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
       - *regctl
       - *login
-      # cosign and docker read Docker's configuration
-      - name: docker login
+      # cosign and docker read Docker's configuration, helm its own
+      - name: docker and helm login
         env:
           GH_TOKEN: ${{ github.token }}
           ACTOR: ${{ github.actor }}
-        run: echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+        run: |
+          set -euo pipefail
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$ACTOR" --password-stdin
       - name: verify
         env:
           GH_TOKEN: ${{ github.token }}
@@ -429,6 +462,9 @@ jobs:
             cosign verify "$IMAGE@$IMAGE_DIGEST" --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER"
           check "the chart is signed by the release workflow" \
             cosign verify "$CHART@$CHART_DIGEST" --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER"
+          check "the chart runs the release's image by digest" equal \
+            "$(helm show values "oci://$CHART" --version "$VERSION" | yq '.image.repository + "@" + .image.digest')" \
+            "$IMAGE@$IMAGE_DIGEST"
           mkdir assets
           check "the release's files download" gh release download "v$VERSION" --repo "$REPO" --dir assets
           check "checksums.txt is signed by the release workflow" \

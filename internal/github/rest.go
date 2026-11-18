@@ -18,7 +18,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 )
 
-// restClient reads GitHub's REST runner list, which the scale-set client does not offer.
+// restClient reads GitHub's REST runner list and runner groups, which the scale-set client does not offer.
 type restClient struct {
 	api         string // REST API root, such as https://api.github.com
 	runnersPath string // such as /orgs/acme/actions/runners
@@ -81,7 +81,8 @@ func (c *restClient) runners(ctx context.Context) ([]restRunner, error) {
 			TotalCount int          `json:"total_count"`
 			Runners    []restRunner `json:"runners"`
 		}
-		if err := c.get(ctx, c.runnersPath+"?per_page=100&page="+strconv.Itoa(page), &body); err != nil {
+		if err := c.get(ctx, "listing runners", c.runnersPath+"?per_page=100&page="+strconv.Itoa(page),
+			&body); err != nil {
 			return nil, err
 		}
 		all = append(all, body.Runners...)
@@ -91,7 +92,37 @@ func (c *restClient) runners(ctx context.Context) ([]restRunner, error) {
 	}
 }
 
-func (c *restClient) get(ctx context.Context, path string, into any) error {
+// restGroup is an entry of GitHub's REST list of runner groups.
+type restGroup struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+// runnerGroups returns the organisation's or enterprise's runner groups, following their pages. A repository has
+// none but its default group, so for a repository it returns none.
+func (c *restClient) runnerGroups(ctx context.Context) ([]restGroup, error) {
+	if strings.HasPrefix(c.runnersPath, "/repos/") {
+		return nil, nil
+	}
+	path := strings.TrimSuffix(c.runnersPath, "/runners") + "/runner-groups"
+	var all []restGroup
+	for page := 1; ; page++ {
+		var body struct {
+			TotalCount   int         `json:"total_count"`
+			RunnerGroups []restGroup `json:"runner_groups"`
+		}
+		if err := c.get(ctx, "listing runner groups", path+"?per_page=100&page="+strconv.Itoa(page),
+			&body); err != nil {
+			return nil, err
+		}
+		all = append(all, body.RunnerGroups...)
+		if len(body.RunnerGroups) < 100 || len(all) >= body.TotalCount {
+			return all, nil
+		}
+	}
+}
+
+func (c *restClient) get(ctx context.Context, what, path string, into any) error {
 	token, err := c.bearer(ctx)
 	if err != nil {
 		return err
@@ -105,14 +136,14 @@ func (c *restClient) get(ctx context.Context, path string, into any) error {
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("github: listing runners: %w", err)
+		return fmt.Errorf("github: %s: %w", what, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("github: listing runners: %s", resp.Status)
+		return fmt.Errorf("github: %s: %s", what, resp.Status)
 	}
 	if err := json.NewDecoder(resp.Body).Decode(into); err != nil {
-		return fmt.Errorf("github: listing runners: %w", err)
+		return fmt.Errorf("github: %s: %w", what, err)
 	}
 	return nil
 }

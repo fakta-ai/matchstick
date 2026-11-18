@@ -70,7 +70,7 @@ func run(ctx context.Context, configPath string, secrets secretSource, log *slog
 	if err != nil {
 		return err
 	}
-	backends, err := newBackends(ctx, cfg, cfg.Pools, secrets, true, log)
+	backends, err := newBackends(ctx, cfg, cfg.Pools, secrets, false, log)
 	if err != nil {
 		return err
 	}

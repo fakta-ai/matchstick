@@ -25,8 +25,10 @@ type backend struct {
 	runners  github.Runners
 	// demand reads the pool's demand once; nil if unknown.
 	demand func(context.Context) (*int, error)
-	// listen reports demand to the pool until ctx ends; nil for the fake.
+	// listen ensures the pool's scale set, then reports demand to the pool until ctx ends; nil for the fake.
 	listen func(ctx context.Context, sink github.Sink)
+	// runnerGroup is the runner group the pool's scale set was found in; empty for the fake and for run.
+	runnerGroup string
 }
 
 // secretSource says where the GitHub credential comes from: standard input, or the secret mount directory.
@@ -46,9 +48,9 @@ func (s secretSource) read() (secret.GitHub, error) {
 	return secret.FromDir(dir)
 }
 
-// newBackends builds each pool's backend. With ensure, it creates or updates the pools' scale sets; without, it
-// only finds them.
-func newBackends(ctx context.Context, cfg *config.Config, pools []config.Pool, secrets secretSource, ensure bool,
+// newBackends builds each pool's backend. With find, it looks up each pool's scale set now, changing nothing, and
+// fails if one is missing; without, each pool's listener ensures its scale set when it starts.
+func newBackends(ctx context.Context, cfg *config.Config, pools []config.Pool, secrets secretSource, find bool,
 	log *slog.Logger) (map[string]backend, error) {
 	out := map[string]backend{}
 	if cfg.Fake != nil {
@@ -84,14 +86,11 @@ func newBackends(ctx context.Context, cfg *config.Config, pools []config.Pool, s
 	cloud := azure.Cloud{SubscriptionID: cfg.Azure.SubscriptionID, ResourceGroup: cfg.Azure.ResourceGroup,
 		Location: cfg.Azure.Location, SubnetID: cfg.Azure.SubnetID}
 	for _, p := range pools {
-		var set *github.ScaleSet
-		if ensure {
-			set, err = client.EnsureScaleSet(ctx, cfg.Instance, p.Name, cfg.GitHub.RunnerGroup, p.Labels)
-		} else {
-			set, err = client.FindScaleSet(ctx, cfg.Instance, p.Name, cfg.GitHub.RunnerGroup)
-		}
-		if err != nil {
-			return nil, op.Errorf(op.CodeUnavailable, "pool %s: %v", p.Name, err)
+		set := client.ScaleSet(cfg.Instance, p.Name, p.RunnerGroup, p.Labels)
+		if find {
+			if err := set.Find(ctx); err != nil {
+				return nil, op.Errorf(op.CodeUnavailable, "pool %s: %v", p.Name, err)
+			}
 		}
 		shape := azure.Shape{Size: p.Azure.Size, Image: p.Azure.Image, Identity: p.Azure.Identity,
 			EphemeralOSDisk: p.Azure.EphemeralOSDisk, OSDiskSizeGB: p.Azure.OSDiskSizeGB, Spot: p.Azure.Spot,
@@ -107,10 +106,11 @@ func newBackends(ctx context.Context, cfg *config.Config, pools []config.Pool, s
 		}
 		maximum := p.Maximum
 		out[p.Name] = backend{
-			machines: machines,
-			runners:  set,
-			demand:   set.Demand,
-			listen:   func(ctx context.Context, sink github.Sink) { set.Listen(ctx, maximum, sink) },
+			machines:    machines,
+			runners:     set,
+			demand:      set.Demand,
+			listen:      func(ctx context.Context, sink github.Sink) { set.Listen(ctx, maximum, sink) },
+			runnerGroup: set.Group(),
 		}
 	}
 	return out, nil

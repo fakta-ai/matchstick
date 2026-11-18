@@ -102,7 +102,9 @@ an internal load balancer. On another cloud, give its own internal load balancer
   as the claim Service's load balancer health probe.
 - Logs: JSON lines on stdout, one per action, with `pool`, `machine` and `reason`; a refused claim says why. A failed
   TLS handshake on the claim endpoint is logged as `claim endpoint` with the error, unless the connection closed
-  before sending a byte (counted in `matchstick_claim_probes_total` instead).
+  before sending a byte (counted in `matchstick_claim_probes_total` instead). A pool whose scale set cannot be put in
+  its runner group logs `the pool cannot scale until its scale set is in its runner group`, with the error and
+  `runnerGroup`, at each try; it creates nothing meanwhile.
 
 Suggested alerts: `time() - matchstick_last_success_timestamp_seconds > 300`; `matchstick_creation_paused == 1` for
 more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"}[1h]) > 3`.
@@ -110,7 +112,7 @@ more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"
 ## Looking
 
 ```sh
-matchstick status --config matchstick.yaml --json   # machines, registrations, demand, per pool
+matchstick status --config matchstick.yaml --json   # machines, registrations, demand, runner group, per pool
 matchstick plan --config matchstick.yaml --json     # what a round would delete and create now
 ```
 

@@ -34,9 +34,13 @@ type fakeGitHub struct {
 	appClientID string
 	appKey      *rsa.PrivateKey
 	events      []string
-	groups      map[string]int
 	sets        map[int]*scaleset.RunnerScaleSet
 	nextID      int
+	// groups are the runner groups by name, with their ids; refuseGroups are those whose lookup the Actions service
+	// refuses, as for a group the credential cannot use; failGroupList makes the REST list of groups fail.
+	groups        map[string]int
+	refuseGroups  map[string]bool
+	failGroupList bool
 	// runners is the REST runner list; failList makes reading it fail.
 	runners  []restRunner
 	failList bool
@@ -83,7 +87,7 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	}
 	f := &fakeGitHub{
 		t: t, adminJWT: admin, clock: time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC),
-		groups: map[string]int{}, sets: map[int]*scaleset.RunnerScaleSet{}, nextID: 100,
+		groups: map[string]int{}, refuseGroups: map[string]bool{}, sets: map[int]*scaleset.RunnerScaleSet{}, nextID: 100,
 		removals: map[int64]fakeReply{}, tokens: map[string]time.Time{}, messages: make(chan fakeMessage, 8),
 	}
 	mux := http.NewServeMux()
@@ -91,6 +95,7 @@ func newFakeGitHub(t *testing.T) *fakeGitHub {
 	mux.HandleFunc("POST /api/v3/orgs/acme/actions/runners/registration-token", f.registrationToken)
 	mux.HandleFunc("POST /api/v3/actions/runner-registration", f.runnerRegistration)
 	mux.HandleFunc("GET /api/v3/orgs/acme/actions/runners", f.runnerList)
+	mux.HandleFunc("GET /api/v3/orgs/acme/actions/runner-groups", f.runnerGroupList)
 	mux.HandleFunc("POST /api/v3/app/installations/{id}/access_tokens", f.installationToken)
 	// The Actions service.
 	mux.HandleFunc("GET /svc/_apis/runtime/runnergroups/", f.admin(f.runnerGroup))
@@ -172,28 +177,63 @@ func (f *fakeGitHub) log(prefixes ...string) []string {
 // waitForPolls waits until the message queue has been polled n times.
 func (f *fakeGitHub) waitForPolls(n int) {
 	f.t.Helper()
+	f.waitFor("poll", n)
+}
+
+// waitFor waits until n events start with prefix.
+func (f *fakeGitHub) waitFor(prefix string, n int) {
+	f.t.Helper()
 	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		if len(f.log("poll")) >= n {
+		if len(f.log(prefix)) >= n {
 			return
 		}
 	}
-	f.t.Fatalf("waiting for %d polls; have %q", n, f.log(""))
+	f.t.Fatalf("waiting for %d events %q; have %q", n, prefix, f.log(""))
+}
+
+// addGroup adds a runner group, if it is not there yet, and returns its id.
+func (f *fakeGitHub) addGroup(name string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.addGroupLocked(name)
+}
+
+func (f *fakeGitHub) addGroupLocked(name string) int {
+	if _, ok := f.groups[name]; !ok {
+		f.groups[name] = len(f.groups) + 1
+	}
+	return f.groups[name]
 }
 
 // addScaleSet puts a scale set in the runner group "linux", creating the group, and returns its id.
 func (f *fakeGitHub) addScaleSet(name string, labels []string, stats *scaleset.RunnerScaleSetStatistic) int {
+	return f.addScaleSetIn("linux", name, labels, stats)
+}
+
+// addScaleSetIn puts a scale set in a runner group, creating the group, and returns its id.
+func (f *fakeGitHub) addScaleSetIn(group, name string, labels []string, stats *scaleset.RunnerScaleSetStatistic) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if _, ok := f.groups["linux"]; !ok {
-		f.groups["linux"] = len(f.groups) + 1
-	}
 	f.nextID++
-	set := &scaleset.RunnerScaleSet{ID: f.nextID, Name: name, RunnerGroupID: f.groups["linux"], Statistics: stats}
+	set := &scaleset.RunnerScaleSet{ID: f.nextID, Name: name, RunnerGroupID: f.addGroupLocked(group),
+		Statistics: stats}
 	for _, l := range labels {
 		set.Labels = append(set.Labels, scaleset.Label{Type: "System", Name: l})
 	}
 	f.sets[set.ID] = set
 	return set.ID
+}
+
+// groupOf returns the name of the runner group a scale set is in.
+func (f *fakeGitHub) groupOf(id int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for name, gid := range f.groups {
+		if f.sets[id] != nil && f.sets[id].RunnerGroupID == gid {
+			return name
+		}
+	}
+	return ""
 }
 
 func reply(w http.ResponseWriter, status int, v any) {
@@ -287,15 +327,41 @@ func (f *fakeGitHub) installationToken(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *fakeGitHub) runnerGroup(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("groupName")
 	f.mu.Lock()
-	id, ok := f.groups[r.URL.Query().Get("groupName")]
+	id, ok := f.groups[name]
+	refuse := f.refuseGroups[name]
 	f.mu.Unlock()
-	if !ok {
+	f.record("group " + name)
+	switch {
+	case refuse:
+		reply(w, http.StatusForbidden, map[string]string{"message": "access denied"})
+	case !ok:
 		reply(w, http.StatusOK, map[string]any{"count": 0, "value": []any{}})
+	default:
+		reply(w, http.StatusOK, map[string]any{"count": 1, "value": []scaleset.RunnerGroup{{ID: id, Name: name}}})
+	}
+}
+
+// runnerGroupList is the REST API's list of the organisation's runner groups, in the order they were made.
+func (f *fakeGitHub) runnerGroupList(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Authorization") != "Bearer pat" {
+		reply(w, http.StatusUnauthorized, map[string]string{"message": "bad credentials"})
 		return
 	}
-	reply(w, http.StatusOK, map[string]any{"count": 1,
-		"value": []scaleset.RunnerGroup{{ID: id, Name: r.URL.Query().Get("groupName")}}})
+	f.mu.Lock()
+	fail := f.failGroupList
+	groups := make([]map[string]any, len(f.groups))
+	for name, id := range f.groups {
+		groups[id-1] = map[string]any{"id": id, "name": name}
+	}
+	f.mu.Unlock()
+	f.record("list groups")
+	if fail {
+		reply(w, http.StatusInternalServerError, map[string]string{"message": "server error"})
+		return
+	}
+	reply(w, http.StatusOK, map[string]any{"total_count": len(groups), "runner_groups": groups})
 }
 
 func (f *fakeGitHub) findScaleSet(w http.ResponseWriter, r *http.Request) {
@@ -318,6 +384,13 @@ func (f *fakeGitHub) createScaleSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	f.mu.Lock()
+	for _, s := range f.sets {
+		if s.RunnerGroupID == set.RunnerGroupID && s.Name == set.Name {
+			f.mu.Unlock()
+			reply(w, http.StatusBadRequest, map[string]string{"message": "the name is taken in the runner group"})
+			return
+		}
+	}
 	f.nextID++
 	set.ID = f.nextID
 	f.sets[set.ID] = &set
@@ -356,8 +429,12 @@ func (f *fakeGitHub) updateScaleSet(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Lock()
 	set.Labels = update.Labels
+	if update.RunnerGroupID != 0 {
+		set.RunnerGroupID = update.RunnerGroupID
+	}
+	group := set.RunnerGroupID
 	f.mu.Unlock()
-	f.record(fmt.Sprintf("update %d labels=%s", set.ID, labelNames(update.Labels)))
+	f.record(fmt.Sprintf("update %d group=%d labels=%s", set.ID, group, labelNames(update.Labels)))
 	reply(w, http.StatusOK, set)
 }
 
@@ -484,14 +561,21 @@ func (f *fakeGitHub) ack(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// sink records the demand it is told into the fake's event log.
+// sink records the demand it is told into the fake's event log, after its pool's name if it has one.
 type sink struct {
 	f        *fakeGitHub
+	pool     string
 	mu       sync.Mutex
 	draining bool
 }
 
-func (s *sink) SetDemand(n int) { s.f.record("demand " + strconv.Itoa(n)) }
+func (s *sink) SetDemand(n int) {
+	if s.pool != "" {
+		s.f.record("demand " + s.pool + " " + strconv.Itoa(n))
+		return
+	}
+	s.f.record("demand " + strconv.Itoa(n))
+}
 
 func (s *sink) Draining() bool {
 	s.mu.Lock()

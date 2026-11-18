@@ -64,8 +64,17 @@ file itself.
 
 ## GitHub
 
-- Each pool has one runner scale set, named `<instance>-<pool>`, in the configured runner group. `run` creates it or
-  updates its labels; `plan` and `status` only look it up.
+- Each pool has one runner scale set, named `<instance>-<pool>`, in the pool's runner group (`pools[].runnerGroup`,
+  else `github.runnerGroup`). The scale set is looked up by name in that group; if it is not there, in every other
+  runner group of the target, by the IDs the REST API lists them with (`/orgs/{org}/actions/runner-groups` or
+  `/enterprises/{enterprise}/actions/runner-groups`; a repository has only its default group). `plan` and `status`
+  only look it up, and report the group it is in. `run`'s listener ensures it before it opens a session: it creates
+  the scale set in the pool's group when no group holds it, moves it there (`PATCH` of the scale set with the
+  group's ID) when one other group holds it, and updates its labels. A moved scale set keeps its ID, its
+  runners and its assigned jobs; creating a new one instead would leave the old one's jobs with no listener. When
+  it cannot tell where the scale set is (the pool's group is missing or refused, the group list cannot be read, or
+  two other groups hold one of that name), it changes nothing on GitHub and tries again after the listener's
+  backoff; until then the pool knows no demand and creates nothing.
 - `JITConfig` calls the scale-set client's `GenerateJitRunnerConfig`; `Remove` calls `RemoveRunner`, mapping "job still
   running" to `ErrJobRunning` and "not found" to success.
 - `List` reads GitHub's REST runner list (`/orgs/{org}/actions/runners`, `/repos/{owner}/{repo}/actions/runners` or
@@ -74,8 +83,8 @@ file itself.
   expires.
 - The listener (`ScaleSet.Listen`) holds the scale set's message session through the client's `listener` package.
   For each message it records `TotalAssignedJobs` as the pool's demand and acquires the jobs offered, unless the pool
-  drains (then it also tells GitHub its capacity is 0). It never calls the cloud. A failed session is reopened after a
-  backoff from 5 seconds to 2 minutes.
+  drains (then it also tells GitHub its capacity is 0). It never calls the cloud. A failed session, or a scale set not
+  yet ensured, is tried again after a backoff from 5 seconds to 2 minutes.
 - If GitHub refuses a second message session for the same scale set (another copy holds it), that copy keeps retrying.
   Until it has a session it knows no demand, so it creates and scales down nothing; its rounds still apply the cleanup
   rules, repeating the other copy's deletions, which are idempotent.
@@ -307,7 +316,7 @@ schema, runs the operation and checks the output against its schema.
 | `status` | each pool's machines, registrations and demand | yes | no | yes | yes |
 | `drain` | asks the running process, at `listen.admin`, to drain a pool or stop draining it | no | yes | yes | yes |
 | `github-app create` | registers a GitHub App through GitHub's App manifest flow and writes its private key to a new file | no | no | no | yes |
-| `github-app check` | checks the configured App: its key, its installation, the installation's permissions, the runner group | yes | no | yes | yes |
+| `github-app check` | checks the configured App: its key, its installation, the installation's permissions, each runner group the configuration names | yes | no | yes | yes |
 
 `plan` and `status` read demand from the scale set's statistics, as GitHub reports them; `null` when it reports none.
 A drain lasts until the process restarts; to keep a pool empty, set its `maximum` to 0.
@@ -355,9 +364,9 @@ with the parameters (without `_meta`) on standard input.
 ## Configuration
 
 YAML (or JSON), unknown fields rejected. `instance` (letters and digits, at most 10), `interval` (default 30s),
-`listen`, `claimURL`, and `pools`, each with `name` (at most 20), `labels`, `maximum`, `spares`, `maxLifetime`
-(default 6h) and `registrationTimeout` (default 10m); then either `github` and `azure` sections with each pool's
-`azure` shape, or a `fake` section. [configuration.md](configuration.md) lists every field.
+`listen`, `claimURL`, and `pools`, each with `name` (at most 20), `labels`, `runnerGroup`, `maximum`, `spares`,
+`maxLifetime` (default 6h) and `registrationTimeout` (default 10m); then either `github` and `azure` sections with
+each pool's `azure` shape, or a `fake` section. [configuration.md](configuration.md) lists every field.
 
 ## Metrics
 
@@ -373,5 +382,6 @@ claims by result. For the claim endpoint: connections closed before their first 
 - Each machine serves one job.
 - Two installations must not share an instance name in the same GitHub organisation or resource group.
 - The network, identities, images and role assignments must exist beforehand.
-- Scale sets are created or updated, never deleted.
+- Scale sets are created, updated or moved between runner groups, never deleted. Runner groups are never created or
+  changed.
 - The only bounds are the maximum machines per pool and the maximum lifetime per machine.

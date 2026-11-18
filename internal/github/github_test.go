@@ -53,10 +53,7 @@ func TestListKeepsOnlyThePoolsRunnersAcrossPages(t *testing.T) {
 	entries[4] = restRunner{ID: 5, Name: naming.New("other", "build", busy), Status: "online"}      // another instance
 	entries[5] = restRunner{ID: 6, Name: naming.Prefix("ci", "build") + "manual", Status: "online"} // not one of ours
 	f.configure(func() { f.runners = entries })
-	s, err := f.client().FindScaleSet(t.Context(), "ci", "build", "linux")
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := find(t, f.client(), "build")
 	got, err := s.List(t.Context())
 	if err != nil {
 		t.Fatal(err)
@@ -77,10 +74,7 @@ func TestListFailsWhenTheRunnerListCannotBeRead(t *testing.T) {
 	f := newFakeGitHub(t)
 	f.addScaleSet("ci-build", nil, nil)
 	f.configure(func() { f.failList = true })
-	s, err := f.client().FindScaleSet(t.Context(), "ci", "build", "linux")
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := find(t, f.client(), "build")
 	if got, err := s.List(t.Context()); err == nil {
 		t.Errorf("got %+v and no error", got)
 	}

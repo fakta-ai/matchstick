@@ -87,10 +87,13 @@ func (c client) accountType(ctx context.Context, login string) (string, error) {
 }
 
 // Gather reads, as the App signed in with creds, what the checks judge: the App, its installation on the target, and
-// the target's runner groups. It stops at the first step that fails. It changes nothing on GitHub; reading runner
-// groups takes a short-lived installation token, as run does.
-func Gather(ctx context.Context, t Target, creds github.Credentials, runnerGroup string, now time.Time) Observed {
-	o := Observed{Target: t, ConfiguredInstallation: creds.AppInstallationID, RunnerGroup: runnerGroup}
+// the target's runner groups, for github.runnerGroup (runnerGroup) and each pool's group (pools). It stops at the
+// first step that fails. It changes nothing on GitHub; reading runner groups takes a short-lived installation token,
+// as run does.
+func Gather(ctx context.Context, t Target, creds github.Credentials, runnerGroup string, pools []PoolGroup,
+	now time.Time) Observed {
+	o := Observed{Target: t, ConfiguredInstallation: creds.AppInstallationID, RunnerGroup: runnerGroup,
+		PoolGroups: pools}
 	c := newClient(t.API)
 	jwt, err := github.AppJWT(creds, now)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -225,7 +226,17 @@ func TestEvaluate(t *testing.T) {
 			o.Target = Target{Kind: Repository, Owner: "acme", Repo: "widgets"}
 			o.Installation.Permissions = map[string]string{"administration": "write", "metadata": "read"}
 			o.Groups, o.RunnerGroup = nil, "ci"
-		}, "key=pass installation=pass permissions=pass runnerGroup=fail", "set github.runnerGroup to default"},
+		}, "key=pass installation=pass permissions=pass runnerGroup=fail", `at default, not "ci"`},
+		{"repository with a pool's group", func(o *Observed) {
+			o.Target = Target{Kind: Repository, Owner: "acme", Repo: "widgets"}
+			o.Installation.Permissions = map[string]string{"administration": "write", "metadata": "read"}
+			o.Groups, o.PoolGroups = nil, []PoolGroup{{"build", "default"}, {"deploy", "ci"}}
+		}, "key=pass installation=pass permissions=pass runnerGroup=fail", `at default, not "ci"`},
+		{"a pool's group missing", func(o *Observed) {
+			o.PoolGroups = []PoolGroup{{"build", "default"}, {"deploy", "gpu"}}
+		}, "key=pass installation=pass permissions=pass runnerGroup=fail", `no runner group "gpu"`},
+		{"a pool's group", func(o *Observed) { o.PoolGroups = []PoolGroup{{"deploy", "CI"}} },
+			"key=pass installation=pass permissions=pass runnerGroup=pass", "ID 3"},
 		{"repository without administration", func(o *Observed) {
 			o.Target = Target{Kind: Repository, Owner: "acme", Repo: "widgets"}
 			o.Groups = nil
@@ -264,6 +275,41 @@ func TestEvaluateReportsIDs(t *testing.T) {
 	r := Evaluate(observed())
 	if !r.OK || r.App != "acme-runners" || r.InstallationID != 7 || r.RunnerGroupID != 1 {
 		t.Errorf("%+v", r)
+	}
+}
+
+func TestEvaluateReportsEachRunnerGroup(t *testing.T) {
+	o := observed()
+	o.PoolGroups = []PoolGroup{{"build", "default"}, {"deploy", "ci"}, {"test", "Default"}, {"gpu", "gpu"},
+		{"release", "CI"}}
+	r := Evaluate(o)
+	want := []GroupCheck{
+		{Name: "default", ID: 1, Pools: []string{"build", "test"}, Status: Pass,
+			Detail: "runner group Default (ID 1) is one the App can use"},
+		{Name: "ci", ID: 3, Pools: []string{"deploy", "release"}, Status: Pass,
+			Detail: "runner group ci (ID 3) is one the App can use"},
+		{Name: "gpu", Pools: []string{"gpu"}, Status: Fail,
+			Detail: `acme has no runner group "gpu" that the App can use; it can use: Default, ci`},
+	}
+	if !reflect.DeepEqual(r.RunnerGroups, want) {
+		t.Errorf("groups\n%+v\nwant\n%+v", r.RunnerGroups, want)
+	}
+	if c := r.Checks[3]; c.Status != Fail || c.Detail != want[2].Detail || r.OK {
+		t.Errorf("runnerGroup check %+v, ok %v", c, r.OK)
+	}
+	// Without the missing group, the check passes and names each group once.
+	o.PoolGroups = o.PoolGroups[:3]
+	r = Evaluate(o)
+	if c := r.Checks[3]; c.Status != Pass || c.Detail != want[0].Detail+"; "+want[1].Detail || !r.OK {
+		t.Errorf("runnerGroup check %+v, ok %v", c, r.OK)
+	}
+	// A github.runnerGroup no pool uses is still checked; skipped checks skip every group.
+	o.PoolGroups = []PoolGroup{{"deploy", "ci"}}
+	o.Installation, o.Groups = nil, nil
+	r = Evaluate(o)
+	if len(r.RunnerGroups) != 2 || len(r.RunnerGroups[0].Pools) != 0 || r.RunnerGroups[0].Status != Skipped ||
+		r.RunnerGroups[1].Status != Skipped || r.Checks[3].Status != Skipped {
+		t.Errorf("groups %+v, check %+v", r.RunnerGroups, r.Checks[3])
 	}
 }
 

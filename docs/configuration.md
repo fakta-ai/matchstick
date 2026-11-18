@@ -35,7 +35,7 @@ authorities the first time it meets each, over HTTP from `cacerts.digicert.com`,
 | Field | Default | Meaning |
 |---|---|---|
 | `url` | required | the organisation, repository or enterprise, such as `https://github.com/acme`, `https://github.com/acme/app` or `https://github.com/enterprises/acme`; GitHub Enterprise Server URLs work the same way |
-| `runnerGroup` | `default` | the runner group of the scale sets |
+| `runnerGroup` | `default` | the runner group of the scale sets of pools that name none ([runner groups](#runner-groups)) |
 | `app.clientID`, `app.installationID` | | the GitHub App to sign in as, with its private key in the secret mount; without `app`, a token from the secret mount |
 
 The App needs, on an organisation: **Self-hosted runners: read and write** (organisation permission). On a repository:
@@ -43,6 +43,26 @@ The App needs, on an organisation: **Self-hosted runners: read and write** (orga
 exactly these; `matchstick github-app check` checks an installed one ([setup.md](setup.md#1-create-the-github-app)).
 GitHub Apps cannot register an enterprise's runners: for an enterprise `url`, leave out `app` and give a token (a
 classic personal access token with `manage_runners:enterprise`).
+
+### Runner groups
+
+Each pool's scale set is in one runner group: the pool's `runnerGroup`, or `github.runnerGroup` if it names none. A
+runner group decides which repositories may use its runners, so a pool whose machines hold an identity
+(`azure.identity`) can sit in a group that admits only the repositories that should get it, while the other pools
+sit in a group that admits more. Pools may share a group. A scale set is named `<instance>-<pool>` whatever its
+group, and matchstick keeps one scale set of that name across all of the target's runner groups.
+
+- The group must exist beforehand (on an organisation, **Settings → Actions → Runner groups**); matchstick neither
+  creates nor changes groups. `matchstick github-app check` checks each group the configuration names.
+- A pool whose group is missing, or that the credential cannot use, creates no machines: its listener logs `the pool
+  cannot scale until its scale set is in its runner group` with the reason, and tries again after 5 seconds, doubling
+  up to 2 minutes. Its rounds still delete finished, expired and unregistered machines; the other pools run as usual.
+- When a pool's group changes, `run` moves the pool's scale set from the group it is in to the new one. It stays the
+  same scale set, with the same ID, so the runners registered in it and the jobs GitHub assigned to it stay with it,
+  and no job is left on a scale set nobody listens to; from then on the new group's repository access applies.
+  `status` shows the group the scale set is in until `run` moves it. A scale set of the pool's name in two other
+  groups keeps the pool from scaling, with both named, until one of them is deleted. A repository has only its
+  default group.
 
 ### The credential
 
@@ -74,6 +94,7 @@ Virtual Machine Contributor and Network Contributor on the resource group also c
 |---|---|---|
 | `name` | required | lower-case letters, digits and inner hyphens, starting with a letter, at most 20 |
 | `labels` | the name | the scale set's labels, which workflows ask for in `runs-on` |
+| `runnerGroup` | `github.runnerGroup` | the runner group of the pool's scale set ([runner groups](#runner-groups)); only with `github` |
 | `maximum` | required | the most machines at once, in any state; 0 keeps the pool empty |
 | `spares` | 0 | idle machines kept ready beyond demand, at most `maximum` |
 | `maxLifetime` | `6h` | a machine older than this is deleted, job or not |

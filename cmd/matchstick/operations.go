@@ -66,6 +66,8 @@ type PoolStatus struct {
 	Pool     string         `json:"pool"`
 	Demand   *int           `json:"demand" jsonschema:"jobs assigned to the pool, waiting or running; null if unknown"`
 	Machines []plan.Machine `json:"machines"`
+	// RunnerGroup is where GitHub has the pool's scale set; run moves it to the pool's runnerGroup.
+	RunnerGroup string `json:"runnerGroup,omitempty" jsonschema:"the runner group the pool's scale set is in; absent for a fake pool"`
 	// Runners is null when GitHub's runner list could not be read.
 	Runners []plan.Runner `json:"runners" jsonschema:"the pool's registrations; null if GitHub could not be read"`
 }
@@ -97,8 +99,9 @@ func operations() []*op.Operation {
 	}, githubAppOperations()...)
 }
 
-// observe builds the selected pools from the configuration and gathers each once.
-func observe(ctx context.Context, in PoolsInput, each func(config.Pool, plan.Observation)) error {
+// observe builds the selected pools from the configuration and gathers each once, with the runner group its scale
+// set is in.
+func observe(ctx context.Context, in PoolsInput, each func(config.Pool, string, plan.Observation)) error {
 	cfg, err := loadConfig(in.Config)
 	if err != nil {
 		return err
@@ -108,7 +111,7 @@ func observe(ctx context.Context, in PoolsInput, each func(config.Pool, plan.Obs
 		return err
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	b, err := newBackends(ctx, cfg, pools, secretSource{dir: in.SecretsDir}, false, log)
+	b, err := newBackends(ctx, cfg, pools, secretSource{dir: in.SecretsDir}, true, log)
 	if err != nil {
 		return err
 	}
@@ -127,14 +130,14 @@ func observe(ctx context.Context, in PoolsInput, each func(config.Pool, plan.Obs
 		if err != nil {
 			return op.Errorf(op.CodeUnavailable, "pool %s: %v", pc.Name, err)
 		}
-		each(pc, o)
+		each(pc, be.runnerGroup, o)
 	}
 	return nil
 }
 
 func planPools(ctx context.Context, in PoolsInput) (PlanOutput, error) {
 	out := PlanOutput{Pools: []PoolPlan{}}
-	err := observe(ctx, in, func(pc config.Pool, o plan.Observation) {
+	err := observe(ctx, in, func(pc config.Pool, _ string, o plan.Observation) {
 		out.Pools = append(out.Pools, PoolPlan{Pool: pc.Name, Observation: o, Decision: plan.Decide(o, pc.Limits())})
 	})
 	return out, err
@@ -142,9 +145,9 @@ func planPools(ctx context.Context, in PoolsInput) (PlanOutput, error) {
 
 func statusPools(ctx context.Context, in PoolsInput) (StatusOutput, error) {
 	out := StatusOutput{Pools: []PoolStatus{}}
-	err := observe(ctx, in, func(pc config.Pool, o plan.Observation) {
+	err := observe(ctx, in, func(pc config.Pool, runnerGroup string, o plan.Observation) {
 		out.Pools = append(out.Pools, PoolStatus{Pool: pc.Name, Demand: o.Demand, Machines: o.Machines,
-			Runners: o.Runners})
+			Runners: o.Runners, RunnerGroup: runnerGroup})
 	})
 	return out, err
 }

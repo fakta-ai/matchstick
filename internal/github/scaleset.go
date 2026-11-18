@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"slices"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/actions/scaleset"
@@ -62,74 +64,158 @@ func NewClient(url string, c Credentials, version string, log *slog.Logger) (*Cl
 	return &Client{url: url, scaleSet: client, rest: rest, log: log, now: time.Now, after: time.After}, nil
 }
 
-// ScaleSet is one pool's runner scale set.
+// ScaleSet is one pool's runner scale set, named <instance>-<pool>, in the pool's runner group. Find or Ensure looks
+// it up; until one of them succeeds, JITConfig and Demand fail, and Listen ensures it before it listens.
 type ScaleSet struct {
 	client   *Client
-	id       int
 	instance string
 	pool     string
+	group    string
+	labels   []scaleset.Label
 	log      *slog.Logger
+	found    atomic.Pointer[location]
+}
+
+// location is where Find or Ensure found the scale set.
+type location struct {
+	id    int
+	group string
 }
 
 var _ Runners = (*ScaleSet)(nil)
 
-// ErrNoScaleSet is returned by FindScaleSet when the pool's scale set does not exist yet.
+// ErrNoScaleSet is returned by Find when the pool's scale set does not exist yet.
 var ErrNoScaleSet = errors.New("the scale set does not exist; matchstick run creates it")
 
-// FindScaleSet finds the pool's scale set, named <instance>-<pool>, in the runner group, changing nothing.
-func (c *Client) FindScaleSet(ctx context.Context, instance, pool, runnerGroup string) (*ScaleSet, error) {
-	group, err := c.scaleSet.GetRunnerGroupByName(ctx, runnerGroup)
-	if err != nil {
-		return nil, fmt.Errorf("github: runner group %q: %w", runnerGroup, err)
-	}
-	name := instance + "-" + pool
-	existing, err := c.scaleSet.GetRunnerScaleSet(ctx, group.ID, name)
-	if err != nil {
-		return nil, fmt.Errorf("github: scale set %q: %w", name, err)
-	}
-	if existing == nil {
-		return nil, fmt.Errorf("github: scale set %q: %w", name, ErrNoScaleSet)
-	}
-	return &ScaleSet{client: c, id: existing.ID, instance: instance, pool: pool, log: c.log.With("pool", pool)}, nil
-}
-
-// EnsureScaleSet finds the pool's scale set, named <instance>-<pool>, in the runner group, creating it or updating its
-// labels as needed.
-func (c *Client) EnsureScaleSet(ctx context.Context, instance, pool, runnerGroup string,
-	labels []string) (*ScaleSet, error) {
-	group, err := c.scaleSet.GetRunnerGroupByName(ctx, runnerGroup)
-	if err != nil {
-		return nil, fmt.Errorf("github: runner group %q: %w", runnerGroup, err)
-	}
+// ScaleSet returns the pool's scale set, not yet looked up: its runner group and the labels Ensure gives it.
+func (c *Client) ScaleSet(instance, pool, runnerGroup string, labels []string) *ScaleSet {
 	want := make([]scaleset.Label, 0, len(labels))
 	for _, l := range labels {
 		want = append(want, scaleset.Label{Type: "System", Name: l})
 	}
-	name := instance + "-" + pool
-	existing, err := c.scaleSet.GetRunnerScaleSet(ctx, group.ID, name)
-	if err != nil {
-		return nil, fmt.Errorf("github: scale set %q: %w", name, err)
+	return &ScaleSet{client: c, instance: instance, pool: pool, group: runnerGroup, labels: want,
+		log: c.log.With("pool", pool)}
+}
+
+// Name is the scale set's name, <instance>-<pool>.
+func (s *ScaleSet) Name() string { return s.instance + "-" + s.pool }
+
+// Group is the runner group Find or Ensure found the scale set in; empty before either succeeds.
+func (s *ScaleSet) Group() string {
+	if l := s.found.Load(); l != nil {
+		return l.group
 	}
-	s := &ScaleSet{client: c, instance: instance, pool: pool, log: c.log.With("pool", pool)}
+	return ""
+}
+
+// Find looks the scale set up, changing nothing: in the pool's runner group, or else in the one other runner group
+// that holds it, from which Ensure would move it.
+func (s *ScaleSet) Find(ctx context.Context) error {
+	l, err := s.lookUp(ctx)
+	if err != nil {
+		return err
+	}
+	if l.set == nil {
+		return fmt.Errorf("github: scale set %q: %w", s.Name(), ErrNoScaleSet)
+	}
+	s.found.Store(&location{id: l.set.ID, group: l.in})
+	return nil
+}
+
+// Ensure makes the scale set what the pool configures: it creates it in the pool's runner group if no runner group
+// holds it, moves it there from the one other group that does, and sets its labels. A scale set moved keeps its ID,
+// its runners and the jobs assigned to it.
+func (s *ScaleSet) Ensure(ctx context.Context) error {
+	l, err := s.lookUp(ctx)
+	if err != nil {
+		return err
+	}
+	name := s.Name()
+	moved := l.set != nil && l.in != s.group
+	var id int
 	switch {
-	case existing == nil:
-		created, err := c.scaleSet.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
-			Name: name, RunnerGroupID: group.ID, Labels: want, RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
+	case l.set == nil:
+		created, err := s.client.scaleSet.CreateRunnerScaleSet(ctx, &scaleset.RunnerScaleSet{
+			Name: name, RunnerGroupID: l.group.ID, Labels: s.labels,
+			RunnerSetting: scaleset.RunnerSetting{DisableUpdate: true},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("github: creating scale set %q: %w", name, err)
+			return fmt.Errorf("github: creating scale set %q in runner group %q: %w", name, s.group, err)
 		}
-		s.id = created.ID
-	case !sameLabels(existing.Labels, want):
-		existing.Labels = want
-		if _, err := c.scaleSet.UpdateRunnerScaleSet(ctx, existing.ID, existing); err != nil {
-			return nil, fmt.Errorf("github: updating scale set %q: %w", name, err)
+		id = created.ID
+	case moved || !sameLabels(l.set.Labels, s.labels):
+		l.set.RunnerGroupID, l.set.Labels = l.group.ID, s.labels
+		if _, err := s.client.scaleSet.UpdateRunnerScaleSet(ctx, l.set.ID, l.set); err != nil {
+			return fmt.Errorf("github: updating scale set %q: %w", name, err)
 		}
-		s.id = existing.ID
+		if moved {
+			s.log.Info("moved the scale set to the pool's runner group", "scaleSet", name, "from", l.in,
+				"to", s.group)
+		}
+		id = l.set.ID
 	default:
-		s.id = existing.ID
+		id = l.set.ID
 	}
-	return s, nil
+	s.found.Store(&location{id: id, group: s.group})
+	return nil
+}
+
+// lookup is what lookUp found: the pool's runner group, and the scale set, if any runner group holds it, with that
+// group's name.
+type lookup struct {
+	group *scaleset.RunnerGroup
+	set   *scaleset.RunnerScaleSet
+	in    string
+}
+
+// lookUp finds the pool's runner group and the scale set: in that group, or else in the other runner groups, by the
+// IDs GitHub's REST API lists them with. Scale set names are unique within a runner group only, so a scale set in two
+// other groups is an error, not a choice.
+func (s *ScaleSet) lookUp(ctx context.Context) (lookup, error) {
+	group, err := s.client.scaleSet.GetRunnerGroupByName(ctx, s.group)
+	if err != nil {
+		return lookup{}, fmt.Errorf("github: runner group %q: %w", s.group, err)
+	}
+	name := s.Name()
+	set, err := s.client.scaleSet.GetRunnerScaleSet(ctx, group.ID, name)
+	if err != nil {
+		return lookup{}, fmt.Errorf("github: scale set %q in runner group %q: %w", name, s.group, err)
+	}
+	if set != nil {
+		return lookup{group: group, set: set, in: s.group}, nil
+	}
+	others, err := s.client.rest.runnerGroups(ctx)
+	if err != nil {
+		return lookup{}, fmt.Errorf("github: looking for scale set %q in other runner groups: %w", name, err)
+	}
+	l := lookup{group: group}
+	var in []string
+	for _, other := range others {
+		if other.ID == group.ID || strings.EqualFold(other.Name, s.group) {
+			continue
+		}
+		found, err := s.client.scaleSet.GetRunnerScaleSet(ctx, other.ID, name)
+		if err != nil {
+			return lookup{}, fmt.Errorf("github: scale set %q in runner group %q: %w", name, other.Name, err)
+		}
+		if found != nil {
+			l.set, l.in = found, other.Name
+			in = append(in, other.Name)
+		}
+	}
+	if len(in) > 1 {
+		return lookup{}, fmt.Errorf("github: scale set %q is in runner groups %s; delete all but one",
+			name, strings.Join(in, ", "))
+	}
+	return l, nil
+}
+
+// id is the scale set's ID, once Find or Ensure found it.
+func (s *ScaleSet) id() (int, error) {
+	if l := s.found.Load(); l != nil {
+		return l.id, nil
+	}
+	return 0, fmt.Errorf("github: scale set %q has not been found in runner group %q", s.Name(), s.group)
 }
 
 func sameLabels(a, b []scaleset.Label) bool {
@@ -146,8 +232,12 @@ func sameLabels(a, b []scaleset.Label) bool {
 
 // JITConfig registers a runner in the scale set and returns its single-use configuration.
 func (s *ScaleSet) JITConfig(ctx context.Context, name string) (JIT, error) {
+	id, err := s.id()
+	if err != nil {
+		return JIT{}, err
+	}
 	c, err := s.client.scaleSet.GenerateJitRunnerConfig(ctx,
-		&scaleset.RunnerScaleSetJitRunnerSetting{Name: name, WorkFolder: "_work"}, s.id)
+		&scaleset.RunnerScaleSetJitRunnerSetting{Name: name, WorkFolder: "_work"}, id)
 	if err != nil {
 		return JIT{}, fmt.Errorf("github: registering runner %s: %w", name, err)
 	}
@@ -190,9 +280,13 @@ func (s *ScaleSet) Remove(ctx context.Context, id int64) error {
 
 // Demand reads the scale set's jobs, waiting and running, once; nil if GitHub does not report them.
 func (s *ScaleSet) Demand(ctx context.Context) (*int, error) {
-	set, err := s.client.scaleSet.GetRunnerScaleSetByID(ctx, s.id)
+	id, err := s.id()
 	if err != nil {
-		return nil, fmt.Errorf("github: scale set %d: %w", s.id, err)
+		return nil, err
+	}
+	set, err := s.client.scaleSet.GetRunnerScaleSetByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("github: scale set %d: %w", id, err)
 	}
 	if set == nil || set.Statistics == nil {
 		return nil, nil
@@ -206,8 +300,9 @@ type Sink interface {
 	Draining() bool
 }
 
-// Listen holds a message session for the scale set until ctx ends, reporting demand to sink and acquiring the jobs
-// GitHub offers unless the pool drains. A failed session is replaced after a backoff.
+// Listen ensures the scale set (Ensure), then holds a message session for it until ctx ends, reporting demand to sink
+// and acquiring the jobs GitHub offers unless the pool drains. Until the scale set is ensured, the pool knows no
+// demand, so it creates no machines. A failed Ensure or session is retried after a backoff.
 func (s *ScaleSet) Listen(ctx context.Context, maxRunners int, sink Sink) {
 	owner, err := os.Hostname()
 	if err != nil {
@@ -223,7 +318,12 @@ func (s *ScaleSet) Listen(ctx context.Context, maxRunners int, sink Sink) {
 		if s.client.now().Sub(started) > 5*time.Minute {
 			backoff = 5 * time.Second
 		}
-		s.log.Warn("listener stopped; reconnecting", "error", err, "after", backoff.String())
+		if s.found.Load() == nil {
+			s.log.Warn("the pool cannot scale until its scale set is in its runner group; retrying", "error", err,
+				"runnerGroup", s.group, "after", backoff.String())
+		} else {
+			s.log.Warn("listener stopped; reconnecting", "error", err, "after", backoff.String())
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -234,7 +334,16 @@ func (s *ScaleSet) Listen(ctx context.Context, maxRunners int, sink Sink) {
 }
 
 func (s *ScaleSet) listen(ctx context.Context, owner string, maxRunners int, sink Sink) error {
-	session, err := s.client.scaleSet.MessageSessionClient(ctx, s.id, owner)
+	if s.found.Load() == nil {
+		if err := s.Ensure(ctx); err != nil {
+			return err
+		}
+	}
+	id, err := s.id()
+	if err != nil {
+		return err
+	}
+	session, err := s.client.scaleSet.MessageSessionClient(ctx, id, owner)
 	if err != nil {
 		return fmt.Errorf("opening a message session: %w", err)
 	}
@@ -243,7 +352,7 @@ func (s *ScaleSet) listen(ctx context.Context, owner string, maxRunners int, sin
 			s.log.Warn("closing the message session", "error", err)
 		}
 	}()
-	l, err := listener.New(session, listener.Config{ScaleSetID: s.id, MaxRunners: maxRunners,
+	l, err := listener.New(session, listener.Config{ScaleSetID: id, MaxRunners: maxRunners,
 		Logger: s.log.With("component", "listener")})
 	if err != nil {
 		return err

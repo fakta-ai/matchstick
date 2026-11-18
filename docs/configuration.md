@@ -97,7 +97,8 @@ Virtual Machine Contributor and Network Contributor on the resource group also c
 | `labels` | the name | the scale set's labels, which workflows ask for in `runs-on` |
 | `runnerGroup` | `github.runnerGroup` | the runner group of the pool's scale set ([runner groups](#runner-groups)); only with `github` |
 | `maximum` | required | the most machines at once, in any state; 0 keeps the pool empty |
-| `spares` | 0 | idle machines kept ready beyond demand, at most `maximum` |
+| `spares` | 0 | idle machines kept ready beyond demand, at most `maximum` ([spares](#spares-and-the-idle-timeout)) |
+| `idleTimeout` | none | keep the spares only while the pool has a job and for this long after its last job ended, such as `30m`; without it, the spares are kept at all times. Needs `spares` |
 | `maxLifetime` | `6h` | a machine older than this is deleted, job or not |
 | `registrationTimeout` | `10m` | a machine whose runner is not online by then is deleted; a registration without a machine for this long is removed |
 | `azure.size` | required | the VM size, such as `Standard_D4ads_v5` |
@@ -108,6 +109,62 @@ Virtual Machine Contributor and Network Contributor on the resource group also c
 | `azure.spot` | false | Spot priority (evicted VMs are deleted), regular priority for 30 minutes after Spot has no capacity |
 | `azure.acceleratedNetworking` | false | accelerated networking on the network interface |
 | `azure.customData` | none | a file whose contents become the VM's custom data, such as a cloud-init configuration |
+
+### Spares and the idle timeout
+
+A job that finds no idle runner waits while its VM is created and boots. `spares` keeps that many machines created,
+registered and idle beyond the jobs the pool has, so a job starts on one at once. A spare is a fresh machine that has
+run nothing; when a job takes it, it serves that one job and is deleted, and the pool creates the next spare. Spares
+count toward `maximum`, and a burst of more jobs than spares gets the rest of its machines created as usual.
+
+Without `idleTimeout`, the pool keeps its spares at all times. With it, the pool keeps them only around its jobs:
+
+- while a job is assigned to the pool, waiting or running (GitHub reports assigned jobs, or one of the pool's runners
+  is busy), the pool keeps its spares;
+- `idleTimeout` counts from the end of the pool's last job, the moment GitHub reports no job assigned to it. A job
+  that comes before it passes starts on a spare and starts the count again once it ends;
+- once `idleTimeout` passes with no job, the pool deletes its idle spares (one that takes a job meanwhile is kept for
+  that job) and holds no machine until the next job.
+
+**The first job after a quiet period waits for its machine**, as in a pool without spares: the pool creates the
+machine for it and the spares with it, and the jobs that follow start on spares. A pool whose every job must start at
+once keeps its spares without `idleTimeout`, and pays for them at all times. matchstick has no schedules (spares only
+during set hours).
+
+`status` shows each pool's `spares`: `count`, the spares it keeps now; `reason`, why: `always` (no `idleTimeout`),
+`busy` (a job is assigned), `recent` (the last job ended less than `idleTimeout` ago), `quiet` or `draining`;
+`lastActive`, the last time the pool had a job as far as matchstick can tell; and `until`, when the spares go if no job
+comes first. `matchstick_spares` reports the count.
+
+**Cost.** A spare bills like any VM from its creation to its deletion. A pool never holds more than `spares` idle
+spares, all within `maximum`. With `idleTimeout`, the spares bill for at most `spares` × (the time the pool has jobs +
+`idleTimeout` after each quiet period begins) a day, never more than the same spares without it, `spares` × 24 hours.
+Each quiet period also ends with up to `spares` machines deleted that ran nothing: one creation each that the jobs did
+not need.
+
+Example: a pool with `spares: 2` and `idleTimeout: 30m` on a VM size that costs, say, $0.20 an hour. Its jobs come
+in three bursts a day, each about an hour long, a few minutes apart within a burst. The spares bill for at most
+2 × 3 × (1 h + 0.5 h) = 9 VM-hours a day, $1.80; without `idleTimeout`, 48 VM-hours, $9.60. The VMs that run the jobs
+bill the same either way. In each burst only the first job waits for a VM.
+
+To choose `idleTimeout`, take the longest gap between jobs that should still find a spare, such as between the jobs of
+one workflow or between a push and the next; longer keeps spares through more gaps, at `spares` VMs for each minute
+of it after each burst. To choose `spares`, take how many jobs start at once on the pool; the rest of a burst waits
+for VMs.
+
+Limits:
+
+- matchstick keeps no records, so after a restart it has not seen the last job end. It takes the creation of the
+  newest machine made before the restart as the pool's last activity: such a machine was made for a job or as a spare.
+  The window can then end earlier than the old process would have ended it, by up to the last job's run time, or
+  once later, by up to `idleTimeout`, when that machine replaced a spare. A pool that holds no machine after a restart
+  is quiet until its next job. `status` and `plan`, which run as their own processes, show the window the same way.
+- A spare is deleted at `maxLifetime` like any machine, even mid-job, and replaced while the pool keeps spares. A
+  spare that waited long for its job leaves that job less of `maxLifetime`.
+- An evicted Spot spare, or one whose runner does not register within `registrationTimeout`, is deleted and replaced
+  while the pool keeps spares.
+- `idleTimeout` is measured with the clock of the host matchstick runs on; a step of that clock moves the end of the
+  window by the step.
 
 ## `fake`
 

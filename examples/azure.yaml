@@ -30,7 +30,9 @@ pools:
   - name: untrusted
     labels: [linux-x64]
     maximum: 4
+    # One idle VM ready while jobs come, kept 30 minutes after the last; none after that.
     spares: 1
+    idleTimeout: 30m
     azure:
       size: Standard_D2ads_v5
       image: /subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/images/providers/Microsoft.Compute/galleries/runners/images/runner/versions/1.0.0

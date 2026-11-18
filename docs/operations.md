@@ -98,12 +98,20 @@ an internal load balancer. On another cloud, give its own internal load balancer
   `matchstick_registration_removals_total{reason}`, `matchstick_rounds_total{result}`,
   `matchstick_round_duration_seconds`, `matchstick_last_success_timestamp_seconds`, `matchstick_creation_paused`,
   `matchstick_draining`, `matchstick_listening`, `matchstick_claims_total{result}` (`released`, `refused`,
-  `failed`), each with a `pool` label; `matchstick_claim_probes_total`, connections to the claim endpoint that closed
-  before sending a byte, such as the claim Service's load balancer health probe.
+  `failed`), `matchstick_spares`, `matchstick_job_startup_seconds`, each with a `pool` label;
+  `matchstick_claim_probes_total`, connections to the claim endpoint that closed before sending a byte, such as the
+  claim Service's load balancer health probe.
 - `matchstick_listening` is 1 while the pool's listener holds a message session for its scale set, and 0 from the
   start until the first session opens and whenever one has ended: while its scale set is not in its runner group,
   while GitHub refuses or drops the session. While it is 0 the pool learns of no new jobs, so they queue on GitHub
   with no machine made for them. A pool of a `fake` configuration has no listener and no such series.
+- `matchstick_spares` is how many idle machines the pool keeps ready now beyond its jobs: its `spares`, or 0 while it
+  is quiet past its `idleTimeout` or drains ([spares](configuration.md#spares-and-the-idle-timeout)).
+- `matchstick_job_startup_seconds` is a histogram of how long each job waited, from GitHub assigning it to the pool's
+  scale set to GitHub assigning it to one of the pool's runners, both times as GitHub's job-started message gives
+  them. A job that started on a spare shows seconds; one that waited for its VM to be created shows that wait. The
+  median over a day: `histogram_quantile(0.5, sum by (pool, le) (increase(matchstick_job_startup_seconds_bucket[1d])))`.
+  It counts the jobs whose job-started message the pool's listener receives.
 - Logs: JSON lines on stdout, one per action, with `pool`, `machine` and `reason`; a refused claim says why. A failed
   TLS handshake on the claim endpoint is logged as `claim endpoint` with the error, unless the connection closed
   before sending a byte (counted in `matchstick_claim_probes_total` instead). A pool whose scale set cannot be put in
@@ -113,16 +121,22 @@ an internal load balancer. On another cloud, give its own internal load balancer
 Suggested alerts: `time() - matchstick_last_success_timestamp_seconds > 300`; `matchstick_creation_paused == 1` for
 more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"}[1h]) > 3`;
 `max_over_time(matchstick_listening[10m]) == 0`, a pool that has not listened for 10 minutes (a session that ends is
-reopened after a backoff that starts at 5 seconds, so a brief 0 does not fire it).
+reopened after a backoff that starts at 5 seconds, so a brief 0 does not fire it);
+`min_over_time(matchstick_runners{status="idle"}[30m]) > ignoring(status) max_over_time(matchstick_spares[30m])`, a
+pool that has held more idle runners than it keeps spares for 30 minutes, such as idle machines it cannot delete
+(`ignoring(status)` because `matchstick_spares` has no `status` label; without it the comparison matches nothing).
 
 ## Looking
 
 ```sh
-matchstick status --config matchstick.yaml --json   # machines, registrations, demand, runner group, per pool
+matchstick status --config matchstick.yaml --json   # machines, registrations, demand, runner group, spares, per pool
 matchstick plan --config matchstick.yaml --json     # what a round would delete and create now
 ```
 
-Both read the cloud and GitHub with the same configuration and secret mount as `run`, and change nothing.
+Both read the cloud and GitHub with the same configuration and secret mount as `run`, and change nothing. A pool's
+`spares` in either says how many idle machines it keeps now, why, and until when; they see only the cloud and
+GitHub, so after the last job ended they show the window as a restarted process would
+([limits](configuration.md#spares-and-the-idle-timeout)).
 
 ## Draining a pool
 
@@ -144,3 +158,9 @@ pool empty, set its `maximum` to 0.
 
 A machine that powered itself off still bills until matchstick deletes it, which it does on the next round. While
 matchstick is stopped, finished machines keep billing, within each pool's maximum, until it starts again.
+
+Idle machines bill too: the spares, and machines still booting. A pool holds at most `spares` idle spares, within its
+`maximum`; without `idleTimeout` they bill at all times, with it only around the pool's jobs
+([spares](configuration.md#spares-and-the-idle-timeout), with a worked example). The VM-hours of idle runners over
+the last day, per pool: `avg_over_time(matchstick_runners{status="idle"}[1d]) * 24`; times the VM size's hourly price,
+their cost.

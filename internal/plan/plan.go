@@ -50,6 +50,9 @@ type Limits struct {
 	// RegistrationTimeout is how long a machine may run without its runner registered, and how long a registration
 	// may exist without its machine.
 	RegistrationTimeout Duration `json:"registrationTimeout"`
+	// IdleTimeout, when set, keeps the spares only while the pool has a job, and for this long after its last job
+	// ended; zero keeps them always.
+	IdleTimeout Duration `json:"idleTimeout,omitempty"`
 }
 
 // Observation is what one round saw.
@@ -64,6 +67,71 @@ type Observation struct {
 	Draining bool `json:"draining,omitempty"`
 	// CreationPaused is set while the pool backs off after capacity errors or machines that never register.
 	CreationPaused bool `json:"creationPaused,omitempty"`
+	// LastActive is when the pool's process last saw a job assigned to the pool, waiting or running, or saw the last
+	// of them end; zero if it has seen none.
+	LastActive time.Time `json:"lastActive,omitzero"`
+	// Started is when the pool's process started. A machine created before it stands for a job the process did not
+	// see: the pool had a job, or kept its spares, when that machine was created.
+	Started time.Time `json:"started,omitzero"`
+}
+
+// SparesReason says why the pool keeps the spares it keeps now.
+type SparesReason string
+
+const (
+	// SparesAlways means the pool has no idle timeout: it keeps its spares at all times.
+	SparesAlways SparesReason = "always"
+	// SparesBusy means the pool has a job assigned, waiting or running.
+	SparesBusy SparesReason = "busy"
+	// SparesRecent means the pool's last job ended less than the idle timeout ago.
+	SparesRecent SparesReason = "recent"
+	// SparesQuiet means the pool has had no job for the idle timeout: it keeps no spares.
+	SparesQuiet SparesReason = "quiet"
+	// SparesDraining means the pool drains: it keeps no spares.
+	SparesDraining SparesReason = "draining"
+)
+
+// Spares is how many idle machines the pool keeps ready now, and why.
+type Spares struct {
+	Count  int          `json:"count"`
+	Reason SparesReason `json:"reason"`
+	// LastActive is the latest time the observation shows the pool with a job: now while it has one, else the later
+	// of the time its process saw the last job end and the creation of its newest machine made before the process
+	// started. Zero without an idle timeout, or when nothing shows a job.
+	LastActive time.Time `json:"lastActive,omitzero"`
+	// Until is when the spares go if no job comes first; only with reason recent.
+	Until time.Time `json:"until,omitzero"`
+}
+
+// SparesNow returns how many spares the pool keeps now. Without an idle timeout that is always the pool's spares.
+// With one, the pool keeps them while it has a job and for the idle timeout after the last job, and none after.
+//
+// The pool has a job while its demand is above zero or one of its runners is busy. The end of its last job is what
+// its process saw; after a restart the process has seen nothing, and the newest machine made before it started
+// stands in: such a machine was created for a job or as a spare, so the pool was active then.
+func SparesNow(o Observation, l Limits) Spares {
+	switch {
+	case o.Draining:
+		return Spares{Reason: SparesDraining}
+	case l.IdleTimeout <= 0:
+		return Spares{Count: l.Spares, Reason: SparesAlways}
+	case o.Demand != nil && *o.Demand > 0 || slices.ContainsFunc(o.Runners, func(r Runner) bool { return r.Busy }):
+		return Spares{Count: l.Spares, Reason: SparesBusy, LastActive: o.Now}
+	}
+	last := o.LastActive
+	for _, m := range o.Machines {
+		if m.CreatedAt.Before(o.Started) && m.CreatedAt.After(last) {
+			last = m.CreatedAt
+		}
+	}
+	if last.IsZero() {
+		return Spares{Reason: SparesQuiet}
+	}
+	until := last.Add(time.Duration(l.IdleTimeout))
+	if o.Now.Before(until) {
+		return Spares{Count: l.Spares, Reason: SparesRecent, LastActive: last, Until: until}
+	}
+	return Spares{Reason: SparesQuiet, LastActive: last}
 }
 
 // Reason says why an action was decided.
@@ -109,6 +177,8 @@ type Decision struct {
 	Create    int        `json:"create"`
 	// Wanted is how many machines the pool should be serving: demand and spares, within the maximum.
 	Wanted int `json:"wanted"`
+	// Spares is how many idle machines the pool keeps ready now, and why; part of Wanted.
+	Spares Spares `json:"spares"`
 	// Serving counts machines pending or running that this decision keeps.
 	Serving int `json:"serving"`
 	// Present counts every machine listed, which all count against the maximum until they are gone.
@@ -117,7 +187,7 @@ type Decision struct {
 
 // Decide returns what the pool should do now.
 func Decide(o Observation, l Limits) Decision {
-	d := Decision{Deletions: []Deletion{}, Removals: []Removal{}, Present: len(o.Machines)}
+	d := Decision{Deletions: []Deletion{}, Removals: []Removal{}, Present: len(o.Machines), Spares: SparesNow(o, l)}
 	timeout := time.Duration(l.RegistrationTimeout)
 
 	runners := make(map[string]Runner, len(o.Runners))
@@ -159,7 +229,7 @@ func Decide(o Observation, l Limits) Decision {
 		return d
 	}
 	if !o.Draining {
-		d.Wanted = min(*o.Demand+l.Spares, l.Maximum)
+		d.Wanted = min(*o.Demand+d.Spares.Count, l.Maximum)
 	}
 
 	if surplus := len(serving) - d.Wanted; surplus > 0 {

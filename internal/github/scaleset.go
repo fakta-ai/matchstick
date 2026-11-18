@@ -300,6 +300,9 @@ type Sink interface {
 	Draining() bool
 	// SetListening says whether the listener holds a message session: true once one opens, false when it ends.
 	SetListening(bool)
+	// JobStarted gives, for a job that started on one of the pool's runners, how long it waited between GitHub
+	// assigning it to the scale set and to that runner.
+	JobStarted(wait time.Duration)
 }
 
 // Listen ensures the scale set (Ensure), then holds a message session for it until ctx ends, reporting demand to sink
@@ -387,15 +390,20 @@ func (s *scaler) Scale(ctx context.Context, m *scaleset.RunnerScaleSetMessage) e
 	if m.Statistics != nil {
 		s.sink.SetDemand(m.Statistics.TotalAssignedJobs)
 	}
-	if draining || len(m.JobAvailableMessages) == 0 {
-		return nil
+	if !draining && len(m.JobAvailableMessages) > 0 {
+		ids := make([]int64, 0, len(m.JobAvailableMessages))
+		for _, j := range m.JobAvailableMessages {
+			ids = append(ids, j.RunnerRequestID)
+		}
+		if _, err := s.session.AcquireJobs(ctx, ids); err != nil {
+			return fmt.Errorf("acquiring jobs: %w", err)
+		}
 	}
-	ids := make([]int64, 0, len(m.JobAvailableMessages))
-	for _, j := range m.JobAvailableMessages {
-		ids = append(ids, j.RunnerRequestID)
-	}
-	if _, err := s.session.AcquireJobs(ctx, ids); err != nil {
-		return fmt.Errorf("acquiring jobs: %w", err)
+	// Reported once the message is handled, so a message GitHub sends again after a failure is not counted twice.
+	for _, j := range m.JobStartedMessages {
+		if !j.ScaleSetAssignTime.IsZero() && !j.RunnerAssignTime.Before(j.ScaleSetAssignTime) {
+			s.sink.JobStarted(j.RunnerAssignTime.Sub(j.ScaleSetAssignTime))
+		}
 	}
 	return nil
 }

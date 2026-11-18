@@ -63,14 +63,20 @@ type fakeReply struct {
 	body   string
 }
 
-// fakeMessage is one answer to a message poll: a message with TotalAssignedJobs and the jobs offered, or, with status
-// set, a failure. advance moves the clock forward first.
+// fakeMessage is one answer to a message poll: a message with TotalAssignedJobs, the jobs offered and the jobs started,
+// or, with status set, a failure. advance moves the clock forward first.
 type fakeMessage struct {
 	id       int
 	assigned int
 	jobs     []int64
+	started  []startedJob
 	status   int
 	advance  time.Duration
+}
+
+// startedJob is a job-started message's two times: when GitHub assigned the job to the scale set, and to a runner.
+type startedJob struct {
+	assigned, started time.Time
 }
 
 const (
@@ -542,9 +548,13 @@ func (f *fakeGitHub) poll(w http.ResponseWriter, r *http.Request) {
 		reply(w, m.status, map[string]string{"message": "poll failed"})
 		return
 	}
-	jobs := make([]map[string]any, 0, len(m.jobs))
+	jobs := make([]map[string]any, 0, len(m.jobs)+len(m.started))
 	for _, id := range m.jobs {
 		jobs = append(jobs, map[string]any{"messageType": scaleset.MessageTypeJobAvailable, "runnerRequestId": id})
+	}
+	for i, j := range m.started {
+		jobs = append(jobs, map[string]any{"messageType": scaleset.MessageTypeJobStarted, "runnerRequestId": 100 + i,
+			"runnerName": "runner", "scaleSetAssignTime": j.assigned, "runnerAssignTime": j.started})
 	}
 	body, err := json.Marshal(jobs)
 	if err != nil {
@@ -579,6 +589,8 @@ func (s *sink) record(what string, n int) {
 }
 
 func (s *sink) SetDemand(n int) { s.record("demand", n) }
+
+func (s *sink) JobStarted(wait time.Duration) { s.record("started", int(wait.Seconds())) }
 
 func (s *sink) SetListening(on bool) {
 	s.mu.Lock()

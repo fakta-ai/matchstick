@@ -87,6 +87,9 @@ type Pool struct {
 	Maximum int `json:"maximum"`
 	// Spares is how many idle machines to keep ready beyond demand.
 	Spares int `json:"spares,omitempty"`
+	// IdleTimeout keeps the spares only while the pool has a job and for this long after its last job ended; none
+	// keeps them always.
+	IdleTimeout plan.Duration `json:"idleTimeout,omitempty"`
 	// MaxLifetime is how long a machine may live, job or not.
 	MaxLifetime plan.Duration `json:"maxLifetime,omitempty"`
 	// RegistrationTimeout is how long a machine may run before its runner registers.
@@ -243,6 +246,9 @@ func (c *Config) validate() error {
 		seen[p.Name] = true
 		check(p.Maximum >= 0, "pool %s: maximum must not be negative", p.Name)
 		check(p.Spares >= 0 && p.Spares <= p.Maximum, "pool %s: spares must be between 0 and maximum", p.Name)
+		check(p.IdleTimeout >= 0, "pool %s: idleTimeout must not be negative", p.Name)
+		check(p.IdleTimeout == 0 || p.Spares > 0,
+			"pool %s: idleTimeout needs spares: it is how long the pool keeps its spares after its last job", p.Name)
 		check(p.RegistrationTimeout > 0, "pool %s: registrationTimeout must be positive", p.Name)
 		check(p.MaxLifetime > p.RegistrationTimeout, "pool %s: maxLifetime must exceed registrationTimeout", p.Name)
 		if c.Azure != nil {
@@ -268,5 +274,6 @@ func (c *Config) validate() error {
 
 // Limits returns the planner's limits for a pool.
 func (p Pool) Limits() plan.Limits {
-	return plan.Limits{Maximum: p.Maximum, Spares: p.Spares, RegistrationTimeout: p.RegistrationTimeout}
+	return plan.Limits{Maximum: p.Maximum, Spares: p.Spares, RegistrationTimeout: p.RegistrationTimeout,
+		IdleTimeout: p.IdleTimeout}
 }

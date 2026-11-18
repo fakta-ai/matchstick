@@ -19,6 +19,8 @@ type Metrics struct {
 	Draining         *prometheus.GaugeVec
 	Listening        *prometheus.GaugeVec
 	Claims           *prometheus.CounterVec
+	Spares           *prometheus.GaugeVec
+	JobStartup       *prometheus.HistogramVec
 	// ClaimProbes counts the claim endpoint's connections that closed before sending a byte.
 	ClaimProbes prometheus.Counter
 }
@@ -45,6 +47,12 @@ func New(reg prometheus.Registerer) *Metrics {
 		Help: "Connections to the claim endpoint that closed before sending a byte, such as a load balancer's TCP " +
 			"health probe. They are not logged."})
 	reg.MustRegister(probes)
+	startup := prometheus.NewHistogramVec(prometheus.HistogramOpts{Namespace: "matchstick",
+		Name: "job_startup_seconds",
+		Help: "Time from GitHub assigning a job to the pool's scale set to assigning it to one of the pool's runners, " +
+			"as GitHub's job-started messages give both times.",
+		Buckets: []float64{1, 2, 5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 300, 600, 1200}}, []string{"pool"})
+	reg.MustRegister(startup)
 	return &Metrics{
 		Demand:   gauge("demand", "Jobs assigned to the pool, waiting or running, as GitHub last reported."),
 		Machines: gauge("machines", "The pool's machines by state.", "state"),
@@ -67,5 +75,9 @@ func New(reg prometheus.Registerer) *Metrics {
 		Claims: counter("claims_total",
 			"Claims of runner configurations by result (released, refused, failed).", "result"),
 		ClaimProbes: probes,
+		Spares: gauge("spares",
+			"Idle machines the pool keeps ready now beyond demand: its spares, or 0 outside its idle window or "+
+				"while it drains."),
+		JobStartup: startup,
 	}
 }

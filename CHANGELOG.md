@@ -5,6 +5,19 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `pools[].idleTimeout`: a pool with `spares` and an `idleTimeout` keeps its spares only while it has a job and for
+  that long after its last job ended, then deletes its idle spares and holds no machine until the next job. Jobs that
+  follow one another start on a spare at once; the first job after a quiet period waits for its machine. Without
+  `idleTimeout`, spares are kept at all times, as before. The chart's values schema accepts it.
+- `status` reports each pool's `spares`: how many idle machines it keeps now, why (`always`, `busy`, `recent`,
+  `quiet`, `draining`), when the pool last had a job and until when the spares stay; `plan` and `decide` report the
+  same in their decision, and `decide` takes `limits.idleTimeout`, `observation.lastActive` and `observation.started`.
+- `matchstick_spares{pool}`: the idle machines the pool keeps ready now.
+- `matchstick_job_startup_seconds{pool}`: a histogram of how long each job waited between GitHub assigning it to the
+  pool's scale set and to one of the pool's runners, from GitHub's job-started messages.
+
 ## [0.5.0] - 2026-11-18
 
 ### Added

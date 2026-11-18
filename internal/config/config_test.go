@@ -27,8 +27,19 @@ func TestParseAppliesDefaults(t *testing.T) {
 	if time.Duration(c.Interval) != DefaultInterval || c.Listen.Admin != DefaultAdmin || c.Listen.Claim != DefaultClaim ||
 		c.GitHub.RunnerGroup != DefaultRunnerGroup || p.Labels[0] != "build" ||
 		time.Duration(p.MaxLifetime) != DefaultMaxLifetime ||
-		time.Duration(p.RegistrationTimeout) != DefaultRegistrationTimeout {
+		time.Duration(p.RegistrationTimeout) != DefaultRegistrationTimeout || p.IdleTimeout != 0 {
 		t.Errorf("defaults not applied: %+v", c)
+	}
+}
+
+func TestIdleTimeoutReachesThePlanner(t *testing.T) {
+	c, err := Parse([]byte(strings.Replace(azure, "maximum: 3", "maximum: 3\n    spares: 2\n    idleTimeout: 30m", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := c.Pools[0].Limits()
+	if l.Spares != 2 || time.Duration(l.IdleTimeout) != 30*time.Minute {
+		t.Errorf("limits %+v, want 2 spares for 30m", l)
 	}
 }
 
@@ -48,6 +59,11 @@ func TestParseRejects(t *testing.T) {
 		"no claimURL":           {"claimURL: https://matchstick.runners.example:8443/claim\n", "", "claimURL is required"},
 		"http claimURL":         {"claimURL: https://", "claimURL: http://", "claimURL"},
 		"claimURL with a query": {"8443/claim", "8443/claim?x=1", "claimURL"},
+		"idle timeout without spares": {"maximum: 3", "maximum: 3\n    idleTimeout: 30m",
+			"idleTimeout needs spares"},
+		"negative idle timeout": {"maximum: 3", "maximum: 3\n    spares: 1\n    idleTimeout: -5m",
+			"idleTimeout must not be negative"},
+		"bad idle timeout": {"maximum: 3", "maximum: 3\n    spares: 1\n    idleTimeout: 30", "duration"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := Parse([]byte(strings.Replace(azure, tc.from, tc.to, 1)))

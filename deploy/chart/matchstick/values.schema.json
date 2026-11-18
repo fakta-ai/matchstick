@@ -180,12 +180,14 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "maximum"],
+      "dependencies": {"idleTimeout": {"required": ["spares"], "properties": {"spares": {"minimum": 1}}}},
       "properties": {
         "name": {"type": "string", "pattern": "^[a-z]([a-z0-9-]*[a-z0-9])?$", "maxLength": 20},
         "labels": {"type": "array", "items": {"type": "string", "minLength": 1}},
         "runnerGroup": {"type": "string", "description": "The runner group of the pool's scale set; github.runnerGroup if empty. Only with github."},
         "maximum": {"type": "integer", "minimum": 0},
         "spares": {"type": "integer", "minimum": 0},
+        "idleTimeout": {"$ref": "#/definitions/duration", "description": "Keep the spares only while the pool has a job and for this long after its last job; without it, always. Needs spares."},
         "maxLifetime": {"$ref": "#/definitions/duration"},
         "registrationTimeout": {"$ref": "#/definitions/duration"},
         "azure": {

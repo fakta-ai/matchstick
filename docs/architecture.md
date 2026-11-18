@@ -219,7 +219,10 @@ redacted. The claim endpoint's TLS key is generated at start and never leaves me
   three intervals plus five minutes (counted from the start before the first round);
 - on `listen.admin` (default `127.0.0.1:9091`): `GET /pools`, and `POST /pools/{pool}/drain` with
   `{"draining": true|false}`;
-- on `listen.claim` (default `:8443`), when `claimURL` is set: the claim endpoint, over TLS.
+- on `listen.claim` (default `:8443`), when `claimURL` is set: the claim endpoint, over TLS. Its server's errors go
+  to the log, failed TLS handshakes included, except a handshake that ended in EOF on a connection that read no byte:
+  a load balancer's TCP health probe opens a connection and closes it without sending anything. Those are counted in
+  `matchstick_claim_probes_total` instead. The listener counts what each connection reads, which tells them apart.
 
 Logs are JSON lines on stdout. SIGINT or SIGTERM stops it; machines and registrations stay as they are for the next
 start, and machines still waiting for their configuration power off and are replaced.
@@ -360,7 +363,7 @@ YAML (or JSON), unknown fields rejected. `instance` (letters and digits, at most
 
 Per pool: demand, machines by state, registrations by status, creations, creation failures by kind, deletions and
 removals by reason, rounds by result, round duration, time of the last successful round, creation paused, draining,
-claims by result.
+claims by result. For the claim endpoint: connections closed before their first byte.
 
 ## Limits
 

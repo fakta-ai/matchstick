@@ -13,6 +13,8 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -28,9 +30,24 @@ import (
 
 var now = time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
 
-// endpoint serves the claim endpoint for one pool with one machine, on a local address, and returns the URL, the
-// machine's bootstrap and the fake cloud.
+// endpoint serves the claim endpoint for one pool with one machine, on a local address, and returns the machine's
+// bootstrap and the fake cloud.
 func endpoint(t *testing.T) (pool.Bootstrap, *providerfake.Provider) {
+	t.Helper()
+	s := serve(t)
+	return s.bootstrap, s.machines
+}
+
+// served is a claim endpoint serving on a local address, with what it logged and how many probes it counted.
+type served struct {
+	bootstrap pool.Bootstrap
+	machines  *providerfake.Provider
+	addr      string
+	log       *syncBuffer
+	probes    *atomic.Int64
+}
+
+func serve(t *testing.T) served {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -42,10 +59,12 @@ func endpoint(t *testing.T) (pool.Bootstrap, *providerfake.Provider) {
 		t.Fatal(err)
 	}
 	machines := providerfake.New(clock)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	logs := &syncBuffer{}
+	log := slog.New(slog.NewTextHandler(logs, nil))
 	p := pool.New(pool.Settings{Instance: "ci", Name: "build", Limits: plan.Limits{Maximum: 1,
 		RegistrationTimeout: plan.Duration(10 * time.Minute)}, MaxLifetime: time.Hour, Interval: time.Minute,
-		Claim: e.Settings()}, machines, githubfake.New(clock), metrics.New(prometheus.NewRegistry()), log, clock)
+		Claim: e.Settings()}, machines, githubfake.New(clock), metrics.New(prometheus.NewRegistry()),
+		slog.New(slog.DiscardHandler), clock)
 	p.SetDemand(1)
 	if _, err := p.Round(context.Background()); err != nil {
 		t.Fatal(err)
@@ -58,10 +77,29 @@ func endpoint(t *testing.T) (pool.Bootstrap, *providerfake.Provider) {
 	if err := json.Unmarshal(machines.Bootstrap(ms[0].Name), &b); err != nil {
 		t.Fatal(err)
 	}
-	s := e.Server([]*pool.Pool{p}, log)
-	go func() { _ = s.Serve(tls.NewListener(l, s.TLSConfig)) }()
+	probes := &atomic.Int64{}
+	s := e.Server([]*pool.Pool{p}, log, func() { probes.Add(1) })
+	go func() { _ = s.Serve(s.Listener(l)) }()
 	t.Cleanup(func() { _ = s.Close() })
-	return b, machines
+	return served{bootstrap: b, machines: machines, addr: l.Addr().String(), log: logs, probes: probes}
+}
+
+// syncBuffer collects log lines written from several goroutines.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 // client trusts only the bootstrap's certificate, as a machine does.
@@ -193,5 +231,89 @@ func TestEndpointCertificateNamesTheHost(t *testing.T) {
 	}
 	if _, err := claim.NewEndpoint("http://matchstick.example/claim", now); err == nil {
 		t.Error("an http URL was accepted")
+	}
+}
+
+// waitUntil waits up to ten seconds for done.
+func waitUntil(t *testing.T, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if done() {
+			return
+		}
+	}
+	t.Fatalf("waiting for %s", what)
+}
+
+// helloOnly is a connection that keeps what a TLS client writes and reads nothing, to capture a ClientHello.
+type helloOnly struct {
+	net.Conn
+	written bytes.Buffer
+}
+
+func (c *helloOnly) Write(p []byte) (int, error) { return c.written.Write(p) }
+func (c *helloOnly) Read([]byte) (int, error)    { return 0, io.EOF }
+func (c *helloOnly) Close() error                { return nil }
+
+func TestConnectionsClosedBeforeTheirFirstByteAreCountedAndEveryOtherHandshakeErrorIsLogged(t *testing.T) {
+	s := serve(t)
+	dial := func() *net.TCPConn {
+		c, err := net.Dial("tcp", s.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c.(*net.TCPConn)
+	}
+	// A load balancer's TCP health probe: connect, then close.
+	for range 3 {
+		_ = dial().Close()
+	}
+	waitUntil(t, "3 probes", func() bool { return s.probes.Load() == 3 })
+	if got := s.log.String(); got != "" {
+		t.Errorf("probes were logged:\n%s", got)
+	}
+
+	// Real clients whose handshake fails are logged, with why, and not counted.
+	// One byte, then a close: the connection ends within a TLS record.
+	c := dial()
+	if _, err := c.Write([]byte{0x16}); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Close()
+	// A client that does not trust the endpoint's certificate.
+	if conn, err := tls.Dial("tcp", s.addr, &tls.Config{MinVersion: tls.VersionTLS12}); err == nil {
+		_ = conn.Close()
+		t.Error("a client without the bootstrap's certificate completed the handshake")
+	}
+	// A whole ClientHello, then a close without an alert: an EOF at a record boundary on a connection that read
+	// something.
+	hello := &helloOnly{}
+	_ = tls.Client(hello, &tls.Config{ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12}).Handshake()
+	c = dial()
+	if _, err := c.Write(hello.written.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.CloseWrite()
+	_, _ = io.Copy(io.Discard, c)
+	_ = c.Close()
+
+	logged := func() int { return strings.Count(s.log.String(), `msg="claim endpoint"`) }
+	waitUntil(t, "3 handshake errors logged", func() bool { return logged() == 3 })
+	log := s.log.String()
+	for _, want := range []string{"unexpected EOF", "certificate", `: EOF"`} {
+		if !strings.Contains(log, want) {
+			t.Errorf("the log lacks %q:\n%s", want, log)
+		}
+	}
+	if got := strings.Count(log, "http: TLS handshake error from 127.0.0.1:"); got != 3 {
+		t.Errorf("%d handshake errors logged, want 3:\n%s", got, log)
+	}
+	if got := s.probes.Load(); got != 3 {
+		t.Errorf("%d probes counted, want 3", got)
+	}
+	// A machine still claims.
+	b := s.bootstrap
+	if status, out := post(t, client(t, b), b.ClaimURL, request(b.Machine, s.machines.Proof(b.Machine))); status != http.StatusOK {
+		t.Errorf("claim: %d %v", status, out)
 	}
 }

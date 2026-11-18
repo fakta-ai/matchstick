@@ -290,7 +290,9 @@ claim:
 
 - `claimURL` is where the runners reach the claim endpoint: the chart's claim Service, an internal load balancer.
   Fixing its address with the annotation, an unused address in the cluster's subnet, lets `claimURL` name it before
-  the Service exists.
+  the Service exists. The load balancer's TCP health probe opens a connection to the claim port every few seconds
+  and closes it without sending a byte; matchstick counts those in `matchstick_claim_probes_total` and does not log
+  them, so the probe needs no setting. A real client whose TLS handshake fails is still logged.
 - `github.url` is `https://github.com/acme/widgets` for a repository's runners; their `runnerGroup` is `default`.
 - `customData` names a file in the pod: the chart's `files` value puts files next to the configuration, in
   `/etc/matchstick` (step 6). Leave it out when the image itself claims and runs the runner as the image contract

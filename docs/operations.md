@@ -98,8 +98,11 @@ an internal load balancer. On another cloud, give its own internal load balancer
   `matchstick_registration_removals_total{reason}`, `matchstick_rounds_total{result}`,
   `matchstick_round_duration_seconds`, `matchstick_last_success_timestamp_seconds`, `matchstick_creation_paused`,
   `matchstick_draining`, `matchstick_claims_total{result}` (`released`, `refused`, `failed`), each with a `pool`
-  label.
-- Logs: JSON lines on stdout, one per action, with `pool`, `machine` and `reason`; a refused claim says why.
+  label; `matchstick_claim_probes_total`, connections to the claim endpoint that closed before sending a byte, such
+  as the claim Service's load balancer health probe.
+- Logs: JSON lines on stdout, one per action, with `pool`, `machine` and `reason`; a refused claim says why. A failed
+  TLS handshake on the claim endpoint is logged as `claim endpoint` with the error, unless the connection closed
+  before sending a byte (counted in `matchstick_claim_probes_total` instead).
 
 Suggested alerts: `time() - matchstick_last_success_timestamp_seconds > 300`; `matchstick_creation_paused == 1` for
 more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"}[1h]) > 3`.

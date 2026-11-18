@@ -3,7 +3,7 @@ package metrics
 
 import "github.com/prometheus/client_golang/prometheus"
 
-// Metrics are the collectors every pool reports to, each labelled by pool.
+// Metrics are the collectors every pool reports to, each labelled by pool, and the claim endpoint's.
 type Metrics struct {
 	Demand           *prometheus.GaugeVec
 	Machines         *prometheus.GaugeVec
@@ -18,6 +18,8 @@ type Metrics struct {
 	CreationPaused   *prometheus.GaugeVec
 	Draining         *prometheus.GaugeVec
 	Claims           *prometheus.CounterVec
+	// ClaimProbes counts the claim endpoint's connections that closed before sending a byte.
+	ClaimProbes prometheus.Counter
 }
 
 // New registers the collectors with reg.
@@ -38,6 +40,10 @@ func New(reg prometheus.Registerer) *Metrics {
 		Name: "round_duration_seconds", Help: "Time one round took: gather, plan and act.",
 		Buckets: prometheus.ExponentialBuckets(0.1, 2, 10)}, []string{"pool"})
 	reg.MustRegister(duration)
+	probes := prometheus.NewCounter(prometheus.CounterOpts{Namespace: "matchstick", Name: "claim_probes_total",
+		Help: "Connections to the claim endpoint that closed before sending a byte, such as a load balancer's TCP " +
+			"health probe. They are not logged."})
+	reg.MustRegister(probes)
 	return &Metrics{
 		Demand:   gauge("demand", "Jobs assigned to the pool, waiting or running, as GitHub last reported."),
 		Machines: gauge("machines", "The pool's machines by state.", "state"),
@@ -56,5 +62,6 @@ func New(reg prometheus.Registerer) *Metrics {
 		Draining:       gauge("draining", "1 while the pool drains."),
 		Claims: counter("claims_total",
 			"Claims of runner configurations by result (released, refused, failed).", "result"),
+		ClaimProbes: probes,
 	}
 }

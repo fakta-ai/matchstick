@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -104,10 +103,11 @@ func run(ctx context.Context, configPath string, secrets secretSource, log *slog
 			ReadHeaderTimeout: 10 * time.Second},
 		{Addr: cfg.Listen.Admin, Handler: server.Admin(served), ReadHeaderTimeout: 10 * time.Second},
 	}
+	var claimServer *claim.Server
 	if endpoint != nil {
-		s := endpoint.Server(pools, log)
-		s.Addr = cfg.Listen.Claim
-		servers = append(servers, s)
+		claimServer = endpoint.Server(pools, log, m.ClaimProbes.Inc)
+		claimServer.Addr = cfg.Listen.Claim
+		servers = append(servers, claimServer.Server)
 	}
 	var listeners []net.Listener
 	for _, s := range servers {
@@ -118,8 +118,8 @@ func run(ctx context.Context, configPath string, secrets secretSource, log *slog
 			}
 			return op.Errorf(op.CodeInvalidConfig, "listen on %s: %v", s.Addr, err)
 		}
-		if s.TLSConfig != nil {
-			l = tls.NewListener(l, s.TLSConfig)
+		if claimServer != nil && s == claimServer.Server {
+			l = claimServer.Listener(l)
 		}
 		listeners = append(listeners, l)
 	}

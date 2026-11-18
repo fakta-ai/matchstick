@@ -122,8 +122,9 @@ Suggested alerts: `time() - matchstick_last_success_timestamp_seconds > 300`; `m
 more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"}[1h]) > 3`;
 `max_over_time(matchstick_listening[10m]) == 0`, a pool that has not listened for 10 minutes (a session that ends is
 reopened after a backoff that starts at 5 seconds, so a brief 0 does not fire it);
-`min_over_time(matchstick_runners{status="idle"}[30m]) > max_over_time(matchstick_spares[30m])`, a pool that has held
-more idle runners than it keeps spares for 30 minutes, such as idle machines it cannot delete.
+`min_over_time(matchstick_runners{status="idle"}[30m]) > ignoring(status) max_over_time(matchstick_spares[30m])`, a
+pool that has held more idle runners than it keeps spares for 30 minutes, such as idle machines it cannot delete
+(`ignoring(status)` because `matchstick_spares` has no `status` label; without it the comparison matches nothing).
 
 ## Looking
 

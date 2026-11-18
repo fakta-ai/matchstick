@@ -16,7 +16,8 @@ It creates the runners as Azure virtual machines and registers them with GitHub 
 ## What it supports
 
 - Several pools in one process, each with its own labels, VM size, image, identity (or none), maximum number of
-  machines, idle spares and maximum lifetime.
+  machines, idle spares (kept at all times, or only while jobs come and for a set time after the last) and maximum
+  lifetime.
 - Azure Linux VMs from a Compute Gallery image, with a private address only, an optional ephemeral OS disk on the
   VM's local storage, and Spot priority that falls back to regular priority when Spot has no capacity.
 - No secret in the VMs' settings: each VM claims its runner registration from matchstick, proving which VM it is with

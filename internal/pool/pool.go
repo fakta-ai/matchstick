@@ -49,9 +49,9 @@ type Claim struct {
 	Certificate string
 }
 
-// Pool is one pool's loop and the little it remembers between rounds: demand, drain, backoff, and the runner
-// configurations of machines that have not claimed theirs yet. All of it is rebuilt or reset harmlessly after a
-// restart.
+// Pool is one pool's loop and the little it remembers between rounds: demand, drain, backoff, when it last saw the
+// pool with a job, and the runner configurations of machines that have not claimed theirs yet. All of it is rebuilt
+// or reset harmlessly after a restart.
 type Pool struct {
 	settings Settings
 	machines provider.Provider
@@ -60,6 +60,8 @@ type Pool struct {
 	log      *slog.Logger
 	now      func() time.Time
 	wake     chan struct{}
+	// started is when the pool was made; machines created before it stand for jobs it did not see.
+	started time.Time
 
 	mu              sync.Mutex
 	demand          *int
@@ -68,22 +70,29 @@ type Pool struct {
 	capacityBackoff time.Duration
 	unregistered    int
 	lastSuccess     time.Time
-	held            map[string]held
+	// lastActive is when the pool last had a job, as far as this process saw: a demand above 0, the moment demand
+	// fell to 0, or a busy runner.
+	lastActive time.Time
+	held       map[string]held
 }
 
 // New returns a pool. now is the clock; tests pass their own.
 func New(s Settings, machines provider.Provider, runners github.Runners, m *metrics.Metrics, log *slog.Logger,
 	now func() time.Time) *Pool {
-	return &Pool{settings: s, machines: machines, runners: runners, metrics: m, now: now,
+	return &Pool{settings: s, machines: machines, runners: runners, metrics: m, now: now, started: now(),
 		log: log.With("pool", s.Name), wake: make(chan struct{}, 1), held: map[string]held{}}
 }
 
 // Name returns the pool's name.
 func (p *Pool) Name() string { return p.settings.Name }
 
-// SetDemand records the jobs assigned to the pool, as the listener reports them, and starts a round.
+// SetDemand records the jobs assigned to the pool, as the listener reports them, and starts a round. A demand above 0,
+// or one that falls to 0, is the pool's latest activity: the idle timeout counts from the end of its last job.
 func (p *Pool) SetDemand(n int) {
 	p.mu.Lock()
+	if n > 0 || p.demand != nil && *p.demand > 0 {
+		p.lastActive = p.now()
+	}
 	p.demand = new(n)
 	p.mu.Unlock()
 	p.metrics.Demand.WithLabelValues(p.settings.Name).Set(float64(n))
@@ -109,6 +118,12 @@ func (p *Pool) Draining() bool {
 // SetListening records whether the pool's listener holds a message session for its scale set.
 func (p *Pool) SetListening(listening bool) {
 	p.metrics.Listening.WithLabelValues(p.settings.Name).Set(boolFloat(listening))
+}
+
+// JobStarted records how long a job waited between GitHub assigning it to the pool's scale set and to one of the
+// pool's runners.
+func (p *Pool) JobStarted(wait time.Duration) {
+	p.metrics.JobStartup.WithLabelValues(p.settings.Name).Observe(wait.Seconds())
 }
 
 // LastSuccess returns when the last round that could see the pool's machines gathered them; zero before the first.
@@ -163,6 +178,7 @@ func (p *Pool) Observe(ctx context.Context) (plan.Observation, error) {
 	}
 	o.Draining = p.draining
 	o.CreationPaused = o.Now.Before(p.pausedUntil)
+	o.LastActive, o.Started = p.lastActive, p.started
 	return o, nil
 }
 
@@ -179,6 +195,12 @@ func (p *Pool) Round(ctx context.Context) (plan.Decision, error) {
 	p.mu.Unlock()
 	p.metrics.LastSuccess.WithLabelValues(p.settings.Name).Set(float64(o.Now.Unix()))
 	d := plan.Decide(o, p.settings.Limits)
+	p.mu.Lock()
+	if d.Spares.LastActive.After(p.lastActive) {
+		p.lastActive = d.Spares.LastActive
+	}
+	p.mu.Unlock()
+	p.metrics.Spares.WithLabelValues(p.settings.Name).Set(float64(d.Spares.Count))
 	p.dropHeld(o, d)
 	p.report(o)
 	p.trackUnregistered(o, d)

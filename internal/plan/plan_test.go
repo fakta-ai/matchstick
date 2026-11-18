@@ -166,6 +166,13 @@ func TestDecide(t *testing.T) {
 			if tt.want.Removals == nil {
 				tt.want.Removals = []Removal{}
 			}
+			// Without an idle timeout the pool keeps its spares always.
+			if tt.want.Spares == (Spares{}) {
+				tt.want.Spares = Spares{Count: l.Spares, Reason: SparesAlways}
+				if tt.obs.Draining {
+					tt.want.Spares = Spares{Reason: SparesDraining}
+				}
+			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("got  %+v\nwant %+v", got, tt.want)
 			}
@@ -207,8 +214,234 @@ func TestDecisionJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"deletions":[],"removals":[],"create":1,"wanted":1,"serving":0,"present":0}`
+	want := `{"deletions":[],"removals":[],"create":1,"wanted":1,"spares":{"count":0,"reason":"always"},"serving":0,` +
+		`"present":0}`
 	if string(b) != want {
 		t.Errorf("got %s, want %s", b, want)
+	}
+}
+
+// idle is a pool that keeps two spares while it has jobs and for 30 minutes after the last.
+var idle = Limits{Maximum: 4, Spares: 2, RegistrationTimeout: Duration(10 * time.Minute),
+	IdleTimeout: Duration(30 * time.Minute)}
+
+// spare returns an idle machine created the given time ago, with its registration online and idle.
+func spare(id int64, name string, age time.Duration) (Machine, Runner) {
+	return machine(name, Running, age), runner(id, name, age, false)
+}
+
+func TestIdleTimeout(t *testing.T) {
+	s1, r1 := spare(1, "s1", 20*time.Minute)
+	s2, r2 := spare(2, "s2", 10*time.Minute)
+	expired, rExpired := spare(1, "old", 3*time.Hour)
+	tests := []struct {
+		name   string
+		obs    Observation
+		limits Limits
+		want   Decision
+	}{
+		{
+			name: "a pool that has had no job keeps no spares",
+			obs:  Observation{Now: now, Demand: new(0), Runners: []Runner{}},
+			want: Decision{Spares: Spares{Reason: SparesQuiet}},
+		},
+		{
+			name: "a job opens the window: a machine for the job and the spares",
+			obs:  Observation{Now: now, Demand: new(1), Runners: []Runner{}},
+			want: Decision{Create: 3, Wanted: 3, Spares: Spares{Count: 2, Reason: SparesBusy, LastActive: now}},
+		},
+		{
+			name: "a busy runner is a job even while demand reads 0",
+			obs: Observation{Now: now, Demand: new(0), Machines: []Machine{machine("a", Running, time.Minute)},
+				Runners: []Runner{runner(1, "a", time.Minute, true)}},
+			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 1,
+				Spares: Spares{Count: 2, Reason: SparesBusy, LastActive: now}},
+		},
+		{
+			name: "a job longer than the idle timeout keeps the window open",
+			obs: Observation{Now: now, Demand: new(1), LastActive: ago(2 * time.Hour),
+				Machines: []Machine{machine("a", Running, 2*time.Hour), s1, s2},
+				Runners:  []Runner{runner(3, "a", 2*time.Hour, true), r1, r2}},
+			want: Decision{Wanted: 3, Serving: 3, Present: 3,
+				Spares: Spares{Count: 2, Reason: SparesBusy, LastActive: now}},
+		},
+		{
+			name: "spares stay for the idle timeout after the last job ended",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(29 * time.Minute),
+				Machines: []Machine{s1, s2}, Runners: []Runner{r1, r2}},
+			want: Decision{Wanted: 2, Serving: 2, Present: 2, Spares: Spares{Count: 2, Reason: SparesRecent,
+				LastActive: ago(29 * time.Minute), Until: now.Add(time.Minute)}},
+		},
+		{
+			name: "once quiet for the idle timeout, the idle spares go, oldest first, guarded",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(30 * time.Minute),
+				Machines: []Machine{s1, s2}, Runners: []Runner{r1, r2}},
+			want: Decision{Present: 2, Spares: Spares{Reason: SparesQuiet, LastActive: ago(30 * time.Minute)},
+				Deletions: []Deletion{{Machine: "s1", Reason: Surplus, RunnerID: 1, Guarded: true},
+					{Machine: "s2", Reason: Surplus, RunnerID: 2, Guarded: true}}},
+		},
+		{
+			name: "a burst larger than the spares: the rest are created on demand",
+			obs: Observation{Now: now, Demand: new(5), LastActive: ago(time.Minute),
+				Machines: []Machine{s1, s2}, Runners: []Runner{r1, r2}},
+			limits: Limits{Maximum: 10, Spares: 2, RegistrationTimeout: idle.RegistrationTimeout,
+				IdleTimeout: idle.IdleTimeout},
+			want: Decision{Create: 5, Wanted: 7, Serving: 2, Present: 2,
+				Spares: Spares{Count: 2, Reason: SparesBusy, LastActive: now}},
+		},
+		{
+			name: "spares count toward the maximum",
+			obs: Observation{Now: now, Demand: new(3), Runners: []Runner{},
+				Machines: []Machine{machine("done", Stopped, time.Hour)}},
+			want: Decision{Create: 3, Wanted: 4, Present: 1,
+				Spares:    Spares{Count: 2, Reason: SparesBusy, LastActive: now},
+				Deletions: []Deletion{{Machine: "done", Reason: Finished}}},
+		},
+		{
+			name: "a spare past its maximum lifetime is replaced while the window is open",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(5 * time.Minute),
+				Machines: []Machine{expired, s2}, Runners: []Runner{rExpired, r2}},
+			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 2,
+				Spares: Spares{Count: 2, Reason: SparesRecent, LastActive: ago(5 * time.Minute),
+					Until: now.Add(25 * time.Minute)},
+				Deletions: []Deletion{{Machine: "old", Reason: Expired, RunnerID: 1}}},
+		},
+		{
+			name: "a spare past its maximum lifetime is not replaced once the pool is quiet",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(time.Hour),
+				Machines: []Machine{expired, s2}, Runners: []Runner{rExpired, r2}},
+			want: Decision{Present: 2, Spares: Spares{Reason: SparesQuiet, LastActive: ago(time.Hour)},
+				Deletions: []Deletion{{Machine: "old", Reason: Expired, RunnerID: 1},
+					{Machine: "s2", Reason: Surplus, RunnerID: 2, Guarded: true}}},
+		},
+		{
+			name: "an evicted Spot spare is replaced while the window is open",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(5 * time.Minute),
+				Machines: []Machine{machine("s1", Stopped, 20*time.Minute), s2}, Runners: []Runner{r2}},
+			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 2,
+				Spares: Spares{Count: 2, Reason: SparesRecent, LastActive: ago(5 * time.Minute),
+					Until: now.Add(25 * time.Minute)},
+				Deletions: []Deletion{{Machine: "s1", Reason: Finished}}},
+		},
+		{
+			name: "an evicted Spot spare the cloud already deleted is replaced while the window is open",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(5 * time.Minute),
+				Machines: []Machine{s2}, Runners: []Runner{r2}},
+			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 1,
+				Spares: Spares{Count: 2, Reason: SparesRecent, LastActive: ago(5 * time.Minute),
+					Until: now.Add(25 * time.Minute)}},
+		},
+		{
+			name: "a spare that never registers is replaced while the window is open",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(5 * time.Minute),
+				Machines: []Machine{machine("s1", Running, 11*time.Minute), s2}, Runners: []Runner{r2}},
+			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 2,
+				Spares: Spares{Count: 2, Reason: SparesRecent, LastActive: ago(5 * time.Minute),
+					Until: now.Add(25 * time.Minute)},
+				Deletions: []Deletion{{Machine: "s1", Reason: Unregistered}}},
+		},
+		{
+			name: "after a restart, the newest machine made before it stands for the last job",
+			obs: Observation{Now: now, Demand: new(0), Started: ago(time.Minute),
+				Machines: []Machine{s1, s2}, Runners: []Runner{r1, r2}},
+			want: Decision{Wanted: 2, Serving: 2, Present: 2, Spares: Spares{Count: 2, Reason: SparesRecent,
+				LastActive: ago(10 * time.Minute), Until: now.Add(20 * time.Minute)}},
+		},
+		{
+			name: "after a restart, spares older than the idle timeout go",
+			obs: Observation{Now: now, Demand: new(0), Started: ago(time.Minute),
+				Machines: []Machine{machine("s1", Running, 40*time.Minute)},
+				Runners:  []Runner{runner(1, "s1", 40*time.Minute, false)}},
+			want: Decision{Present: 1, Spares: Spares{Reason: SparesQuiet, LastActive: ago(40 * time.Minute)},
+				Deletions: []Deletion{{Machine: "s1", Reason: Surplus, RunnerID: 1, Guarded: true}}},
+		},
+		{
+			name: "a machine made since the start is no evidence: a replacement does not extend the window",
+			obs: Observation{Now: now, Demand: new(0), Started: ago(time.Hour), LastActive: ago(31 * time.Minute),
+				Machines: []Machine{machine("s1", Running, 5*time.Minute)},
+				Runners:  []Runner{runner(1, "s1", 5*time.Minute, false)}},
+			want: Decision{Present: 1, Spares: Spares{Reason: SparesQuiet, LastActive: ago(31 * time.Minute)},
+				Deletions: []Deletion{{Machine: "s1", Reason: Surplus, RunnerID: 1, Guarded: true}}},
+		},
+		{
+			name: "demand unknown (no session, such as a second copy): nothing created, nothing scaled down",
+			obs:  Observation{Now: now, LastActive: ago(time.Hour), Machines: []Machine{s1}, Runners: []Runner{r1}},
+			want: Decision{Serving: 1, Present: 1, Spares: Spares{Reason: SparesQuiet, LastActive: ago(time.Hour)}},
+		},
+		{
+			name: "demand unknown in an open window: nothing created",
+			obs:  Observation{Now: now, LastActive: ago(time.Minute), Runners: []Runner{}},
+			want: Decision{Spares: Spares{Count: 2, Reason: SparesRecent, LastActive: ago(time.Minute),
+				Until: now.Add(29 * time.Minute)}},
+		},
+		{
+			name: "draining keeps no spares",
+			obs: Observation{Now: now, Demand: new(1), Draining: true, LastActive: now,
+				Machines: []Machine{s1}, Runners: []Runner{r1}},
+			want: Decision{Present: 1, Spares: Spares{Reason: SparesDraining},
+				Deletions: []Deletion{{Machine: "s1", Reason: Surplus, RunnerID: 1, Guarded: true}}},
+		},
+		{
+			name: "a clock set back keeps the spares the idle timeout past the last job it recorded",
+			obs:  Observation{Now: now, Demand: new(0), LastActive: now.Add(time.Hour), Runners: []Runner{}},
+			want: Decision{Create: 2, Wanted: 2, Spares: Spares{Count: 2, Reason: SparesRecent,
+				LastActive: now.Add(time.Hour), Until: now.Add(90 * time.Minute)}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := tt.limits
+			if l == (Limits{}) {
+				l = idle
+			}
+			got := Decide(tt.obs, l)
+			if tt.want.Deletions == nil {
+				tt.want.Deletions = []Deletion{}
+			}
+			if tt.want.Removals == nil {
+				tt.want.Removals = []Removal{}
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("got  %+v\nwant %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNoIdleTimeoutIgnoresHistory checks that a pool without an idle timeout decides the same whatever its process
+// saw or when it started: it keeps its spares, demand plus spares within the maximum.
+func TestNoIdleTimeoutIgnoresHistory(t *testing.T) {
+	states := []MachineState{Pending, Running, Stopped, Failed, Deleting}
+	fixed := Limits{Maximum: 4, Spares: 2, RegistrationTimeout: Duration(10 * time.Minute)}
+	histories := []struct{ lastActive, started time.Time }{
+		{}, {ago(time.Hour), ago(time.Minute)}, {ago(time.Minute), ago(2 * time.Hour)}, {now.Add(time.Hour), now},
+	}
+	for n := range 5 {
+		for demand := range 6 {
+			for s := range len(states) {
+				var machines []Machine
+				var runners []Runner
+				for i := range n {
+					name := string(rune('a' + i))
+					machines = append(machines, machine(name, states[(s+i)%len(states)], time.Duration(i)*time.Hour))
+					runners = append(runners, runner(int64(i+1), name, time.Duration(i)*time.Hour, i%2 == 0))
+				}
+				base := Observation{Now: now, Machines: machines, Runners: runners, Demand: new(demand)}
+				want := Decide(base, fixed)
+				if want.Spares != (Spares{Count: 2, Reason: SparesAlways}) {
+					t.Fatalf("spares %+v, want always 2", want.Spares)
+				}
+				if want.Wanted != min(demand+2, 4) {
+					t.Fatalf("demand %d: wanted %d, want %d", demand, want.Wanted, min(demand+2, 4))
+				}
+				for _, h := range histories {
+					o := base
+					o.LastActive, o.Started = h.lastActive, h.started
+					if got := Decide(o, fixed); !reflect.DeepEqual(got, want) {
+						t.Fatalf("history %+v changed the decision:\ngot  %+v\nwant %+v", h, got, want)
+					}
+				}
+			}
+		}
 	}
 }

@@ -1,9 +1,9 @@
 # Architecture
 
 matchstick gives every GitHub Actions job a fresh cloud virtual machine and deletes the machine when the job is done.
-It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, and the one
-thing it holds besides, each waiting machine's runner configuration, lives only in its memory. This document describes
-the code as it is, for people changing it.
+It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, and the two
+things it holds besides, each waiting machine's runner configuration and when it last saw each pool with a job, live
+only in its memory. This document describes the code as it is, for people changing it.
 
 ## Packages
 
@@ -83,7 +83,9 @@ file itself.
   expires.
 - The listener (`ScaleSet.Listen`) holds the scale set's message session through the client's `listener` package.
   For each message it records `TotalAssignedJobs` as the pool's demand and acquires the jobs offered, unless the pool
-  drains (then it also tells GitHub its capacity is 0). It never calls the cloud. A failed session, or a scale set not
+  drains (then it also tells GitHub its capacity is 0). For each job-started message that carries both times, it
+  reports to the pool how long the job waited between GitHub assigning it to the scale set and to a runner
+  (`matchstick_job_startup_seconds`). It never calls the cloud. A failed session, or a scale set not
   yet ensured, is tried again after a backoff from 5 seconds to 2 minutes. The pool's `matchstick_listening` is 1 from
   a session's opening until it ends, 0 otherwise.
 - If GitHub refuses a second message session for the same scale set (another copy holds it), that copy keeps retrying.
@@ -251,8 +253,9 @@ delete and registrations to remove, each with a reason, and how many machines to
 
 The observation holds the current time, the pool's machines (name, state, creation time, expiry), its runner
 registrations (id, name, creation time from the name, online, busy) or `null` when GitHub's list could not be read,
-its demand (jobs assigned, waiting or running) or `null` when unknown, whether the pool drains, and whether creation is
-paused. The limits are the maximum number of machines, the number of idle spares, and the registration timeout.
+its demand (jobs assigned, waiting or running) or `null` when unknown, whether the pool drains, whether creation is
+paused, when the process last saw the pool with a job (`lastActive`), and when the process started (`started`). The
+limits are the maximum number of machines, the number of idle spares, the registration timeout, and the idle timeout.
 
 | Rule | Condition | Action |
 |---|---|---|
@@ -265,7 +268,13 @@ paused. The limits are the maximum number of machines, the number of idle spares
 
 Counting:
 
-- `wanted = min(demand + spares, maximum)`; 0 while draining.
+- `wanted = min(demand + spares now, maximum)`; 0 while draining.
+- spares now (`plan.SparesNow`, in the decision as `spares` with its reason): 0 while draining; without an idle
+  timeout, the pool's spares (`always`); with one, the pool's spares while demand is above 0 or a runner is busy
+  (`busy`), and until the idle timeout after the pool's last activity (`recent`), 0 after (`quiet`). The last activity
+  is the later of `lastActive` and the creation of the newest machine created before `started`: after a restart, such
+  a machine shows that the pool had a job or kept spares when it was made. Machines created since the start are no
+  such evidence, so a spare replaced in the window does not extend it.
 - `serving` = machines pending or running that no rule deletes.
 - `present` = every machine listed, in any state, including those being deleted.
 - creates = `min(wanted − serving, maximum − present)`, at least 0; none while demand is unknown or creation is paused.
@@ -301,8 +310,11 @@ Creation pauses, in memory:
 - after `ErrCapacity`: 2 minutes, doubling up to 30, reset by a successful creation;
 - after three machines in a row deleted as unregistered: 10 minutes; a machine whose runner is online resets the count.
 
-A new `Pool` over the same cloud and GitHub starts with demand unknown and no configurations: its first round cleans
-up (finished, expired, unregistered, orphan) and creates nothing until demand is set.
+The pool's last activity, in memory: `SetDemand` records the time when demand is above 0 and when it falls to 0 (the
+end of the last job), and each round keeps the later of that and the decision's `spares.lastActive`.
+
+A new `Pool` over the same cloud and GitHub starts with demand unknown, no configurations and no last activity: its
+first round cleans up (finished, expired, unregistered, orphan) and creates nothing until demand is set.
 
 ## Operations
 
@@ -314,7 +326,7 @@ schema, runs the operation and checks the output against its schema.
 |---|---|---|---|---|---|
 | `decide` | the planner: an observation and limits in, a decision out | yes | no | yes | no |
 | `plan` | gathers each configured pool and returns what a round would do; changes nothing | yes | no | yes | yes |
-| `status` | each pool's machines, registrations and demand | yes | no | yes | yes |
+| `status` | each pool's machines, registrations, demand and the spares it keeps now | yes | no | yes | yes |
 | `drain` | asks the running process, at `listen.admin`, to drain a pool or stop draining it | no | yes | yes | yes |
 | `github-app create` | registers a GitHub App through GitHub's App manifest flow and writes its private key to a new file | no | no | no | yes |
 | `github-app check` | checks the configured App: its key, its installation, the installation's permissions, each runner group the configuration names | yes | no | yes | yes |
@@ -366,15 +378,16 @@ with the parameters (without `_meta`) on standard input.
 
 YAML (or JSON), unknown fields rejected. `instance` (letters and digits, at most 10), `interval` (default 30s),
 `listen`, `claimURL`, and `pools`, each with `name` (at most 20), `labels`, `runnerGroup`, `maximum`, `spares`,
-`maxLifetime` (default 6h) and `registrationTimeout` (default 10m); then either `github` and `azure` sections with
-each pool's `azure` shape, or a `fake` section. [configuration.md](configuration.md) lists every field.
+`idleTimeout` (none by default), `maxLifetime` (default 6h) and `registrationTimeout` (default 10m); then either
+`github` and `azure` sections with each pool's `azure` shape, or a `fake` section. [configuration.md](configuration.md)
+lists every field.
 
 ## Metrics
 
 Per pool: demand, machines by state, registrations by status, creations, creation failures by kind, deletions and
 removals by reason, rounds by result, round duration, time of the last successful round, creation paused, draining,
-listening (holding a message session), claims by result. For the claim endpoint: connections closed before their
-first byte.
+listening (holding a message session), claims by result, spares kept now, and a histogram of how long jobs waited
+for a runner. For the claim endpoint: connections closed before their first byte.
 
 ## Limits
 

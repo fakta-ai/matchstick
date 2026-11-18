@@ -320,6 +320,28 @@ func TestListenRecordsDemandAndAcquiresOfferedJobs(t *testing.T) {
 	}
 }
 
+func TestListenReportsHowLongEachStartedJobWaited(t *testing.T) {
+	f := newFakeGitHub(t)
+	f.addScaleSet("ci-build", nil, nil)
+	stop := listen(t, f.client(), &sink{f: f})
+	f.waitForPolls(1)
+	assigned := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	f.messages <- fakeMessage{id: 1, assigned: 2, started: []startedJob{
+		{assigned: assigned, started: assigned.Add(85 * time.Second)},
+		{assigned: assigned, started: assigned.Add(2 * time.Second)},
+		// Not counted: no runner time (not a start), times out of order, no scale-set time.
+		{assigned: assigned},
+		{assigned: assigned, started: assigned.Add(-time.Second)},
+		{started: assigned},
+	}}
+	f.waitForPolls(2)
+	stop()
+	want := []string{"demand 0", "demand 2", "started 85", "started 2"}
+	if got := f.log("demand", "started"); !slices.Equal(got, want) {
+		t.Errorf("got  %q\nwant %q", got, want)
+	}
+}
+
 func TestListenWhileDrainingAcquiresNothingAndReportsNoCapacity(t *testing.T) {
 	f := newFakeGitHub(t)
 	f.addScaleSet("ci-build", nil, nil)

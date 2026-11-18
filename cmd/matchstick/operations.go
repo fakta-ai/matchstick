@@ -70,6 +70,9 @@ type PoolStatus struct {
 	RunnerGroup string `json:"runnerGroup,omitempty" jsonschema:"the runner group the pool's scale set is in; absent for a fake pool"`
 	// Runners is null when GitHub's runner list could not be read.
 	Runners []plan.Runner `json:"runners" jsonschema:"the pool's registrations; null if GitHub could not be read"`
+	// Spares is what this process can tell from the cloud and GitHub; the running process may also have seen the
+	// last job end.
+	Spares plan.Spares `json:"spares" jsonschema:"the idle machines the pool keeps ready now, why, and until when"`
 }
 
 func operations() []*op.Operation {
@@ -87,7 +90,7 @@ func operations() []*op.Operation {
 			op.Annotations{ReadOnly: true, Idempotent: true, OpenWorld: true},
 			planPools),
 		op.Define("status",
-			"Show each pool's machines, runner registrations and demand, as the cloud and GitHub report them.",
+			"Show each pool's machines, runner registrations, demand and spares, as the cloud and GitHub report them.",
 			"matchstick status --config matchstick.yaml --pool build",
 			op.Annotations{ReadOnly: true, Idempotent: true, OpenWorld: true},
 			statusPools),
@@ -147,7 +150,7 @@ func statusPools(ctx context.Context, in PoolsInput) (StatusOutput, error) {
 	out := StatusOutput{Pools: []PoolStatus{}}
 	err := observe(ctx, in, func(pc config.Pool, runnerGroup string, o plan.Observation) {
 		out.Pools = append(out.Pools, PoolStatus{Pool: pc.Name, Demand: o.Demand, Machines: o.Machines,
-			Runners: o.Runners, RunnerGroup: runnerGroup})
+			Runners: o.Runners, RunnerGroup: runnerGroup, Spares: plan.SparesNow(o, pc.Limits())})
 	})
 	return out, err
 }

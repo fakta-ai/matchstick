@@ -51,7 +51,9 @@ claim:
     # The load balancer's annotations, for the cluster's cloud. The default makes an internal Azure load balancer, so
     # that VMs in the virtual network reach it; to give it a fixed address for claimURL, add
     # service.beta.kubernetes.io/azure-load-balancer-ipv4: <address>. On another cloud, set its internal load
-    # balancer's annotations, and the Azure one to null to drop it.
+    # balancer's annotations, and the Azure one to null to drop it. The load balancer's TCP health probe on the claim
+    # port needs no setting: matchstick counts connections that close without a byte in matchstick_claim_probes_total
+    # and does not log them.
     annotations:
       service.beta.kubernetes.io/azure-load-balancer-internal: "true"
 

@@ -5,6 +5,14 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The log no longer gets `http: TLS handshake error from <address>: EOF` every few seconds when the claim endpoint is
+  behind a cloud load balancer: its TCP health probe opens a connection and closes it without sending a byte. Such
+  connections are counted in the new metric `matchstick_claim_probes_total` instead. Every other error of the claim
+  endpoint's server, a real client's failed TLS handshake included, is logged as a JSON line (`claim endpoint`, with
+  the error) instead of a plain line on standard error.
+
 ## [0.4.1] - 2026-11-17
 
 ### Fixed

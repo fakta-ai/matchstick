@@ -15,6 +15,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	stdlog "log"
 	"log/slog"
 	"math/big"
 	"net"
@@ -163,15 +164,30 @@ func (e *Endpoint) Settings() pool.Claim {
 	return pool.Claim{URL: e.url, Certificate: e.certPEM}
 }
 
-// Server returns the endpoint's server, for the given pools. Its TLSConfig carries the key: serve it on a listener
-// wrapped with tls.NewListener, or with ServeTLS(listener, "", "").
-func (e *Endpoint) Server(pools []*pool.Pool, log *slog.Logger) *http.Server {
-	return &http.Server{
+// Server is the endpoint's HTTP server, with the listener to serve it on.
+type Server struct {
+	*http.Server
+	handshakes *handshakes
+}
+
+// Server returns the endpoint's server, for the given pools. Its error log goes to log, except a TLS handshake that
+// ends at once on a connection that sent no byte, as a load balancer's TCP health probe does: that calls probed
+// instead. Serve it on Listener.
+func (e *Endpoint) Server(pools []*pool.Pool, log *slog.Logger, probed func()) *Server {
+	h := &handshakes{log: log, probed: probed, open: map[string]*countingConn{}}
+	return &Server{handshakes: h, Server: &http.Server{
 		Handler:           Handler(e.path, pools, log),
 		TLSConfig:         &tls.Config{Certificates: []tls.Certificate{e.cert}, MinVersion: tls.VersionTLS12},
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      Timeout + 30*time.Second,
 		MaxHeaderBytes:    16 << 10,
-	}
+		ErrorLog:          stdlog.New(h, "", 0),
+	}}
+}
+
+// Listener wraps l, a TCP listener, into the one to serve on: TLS with the endpoint's key, over connections that count
+// what they read.
+func (s *Server) Listener(l net.Listener) net.Listener {
+	return tls.NewListener(&countingListener{Listener: l, h: s.handshakes}, s.TLSConfig)
 }

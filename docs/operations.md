@@ -47,6 +47,32 @@ Flux checks the chart itself when its `OCIRepository` has `verify.provider: cosi
 (`matchOIDCIdentity`). A released chart runs its release's image by digest (below), so a chart whose signature checks
 out also fixes the image it runs.
 
+### The end-to-end check before publication
+
+Between staging and copying, the release workflow can wait for an end-to-end system to test the staged chart and
+image. Three repository variables set it:
+
+| Variable | Unset | Set |
+|---|---|---|
+| `RELEASE_E2E_CONTEXT` | no wait: the staged bytes are published at once | the commit status context the release waits for, on the release's commit |
+| `RELEASE_E2E_TIMEOUT` | 30 minutes | how long, in minutes (1 to 350), the release waits for `success` |
+| `RELEASE_E2E_ACK_TIMEOUT` | one wait, up to `RELEASE_E2E_TIMEOUT`, whatever the end-to-end system does | how long, in minutes (1 to 350), the end-to-end system has to acknowledge the build |
+
+Only a status of that context whose description names the staged chart's digest counts; one naming another digest is
+about an earlier build of the same commit and is ignored. With `RELEASE_E2E_ACK_TIMEOUT` set, the first such status,
+in any state, acknowledges the build: usually `pending`, set as the test starts, but a result arriving first counts
+too.
+
+| What the release sees | What it does |
+|---|---|
+| an acknowledgement, then `success` | copies the staged bytes to the public names and publishes |
+| an acknowledgement, then `failure` or `error` | fails with the status's description |
+| an acknowledgement, then nothing more | fails at `RELEASE_E2E_TIMEOUT` |
+| no status naming this build's chart (none, or only another build's) | fails at `RELEASE_E2E_ACK_TIMEOUT`, "no end-to-end system acknowledged this build"; without it set, at `RELEASE_E2E_TIMEOUT` |
+
+A failed wait leaves the draft release and the staged bytes as they are. Re-running the release's failed jobs once
+the end-to-end system has reported picks its status up.
+
 ## Running
 
 ```sh

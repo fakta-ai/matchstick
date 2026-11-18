@@ -76,7 +76,9 @@ only `flake.lock` merges by itself once `check` passes.
   commit `vx.y.z`, builds everything once with GoReleaser (`.goreleaser.yaml`) into a draft release and staging
   registries (`ghcr.io/fakta-ai/matchstick-staging`, `ghcr.io/fakta-ai/charts-staging/matchstick`), signed and with
   SBOMs, the chart's default image the staged image's digest; waits, when `RELEASE_E2E_CONTEXT` is set, for an
-  end-to-end status on the commit whose description names the staged chart's digest; copies the staged digests to the
-  public names, publishes the draft, and verifies what it published. Signatures are Sigstore's, keyless, by
-  `release.yml@refs/heads/main`; build provenance attestations are added once the repository is public. The image's
-  base is pinned by digest in `.goreleaser.yaml` and moved by hand.
+  end-to-end status on the commit whose description names the staged chart's digest, and, when
+  `RELEASE_E2E_ACK_TIMEOUT` is set too, fails early unless a status naming that digest (`pending` or a result)
+  acknowledges the build within that many minutes; copies the staged digests to the public names, publishes the
+  draft, and verifies what it published. Signatures are Sigstore's, keyless, by `release.yml@refs/heads/main`; build
+  provenance attestations are added once the repository is public. The image's base is pinned by digest in
+  `.goreleaser.yaml` and moved by hand.

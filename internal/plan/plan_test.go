@@ -445,3 +445,27 @@ func TestNoIdleTimeoutIgnoresHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestLeaving(t *testing.T) {
+	since := map[string]time.Time{"a": ago(20 * time.Minute), "b": ago(5 * time.Minute), "gone": ago(time.Hour),
+		"restarted": ago(time.Hour)}
+	o := Observation{Now: now, Machines: []Machine{
+		machine("a", Deleting, time.Hour),        // stopped 20 minutes ago, its deletion under way since
+		machine("b", Failed, time.Hour),          // failed 5 minutes ago
+		machine("c", Stopped, time.Hour),         // stopped since the last round
+		machine("d", Running, time.Hour),         // serving
+		machine("restarted", Running, time.Hour), // listed running again: no longer on its way out
+	}}
+	leaving, longest := Leaving(since, o)
+	want := map[string]time.Time{"a": ago(20 * time.Minute), "b": ago(5 * time.Minute), "c": now}
+	if !reflect.DeepEqual(leaving, want) {
+		t.Errorf("leaving = %v, want %v", leaving, want)
+	}
+	if longest != 20*time.Minute {
+		t.Errorf("longest = %v, want 20m", longest)
+	}
+	serving := Observation{Now: now, Machines: []Machine{machine("d", Running, 0)}}
+	if leaving, longest := Leaving(leaving, serving); len(leaving) != 0 || longest != 0 {
+		t.Errorf("with every machine gone or serving: leaving = %v, longest = %v; want none and 0", leaving, longest)
+	}
+}

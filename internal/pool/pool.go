@@ -50,8 +50,8 @@ type Claim struct {
 }
 
 // Pool is one pool's loop and the little it remembers between rounds: demand, drain, backoff, when it last saw the
-// pool with a job, and the runner configurations of machines that have not claimed theirs yet. All of it is rebuilt
-// or reset harmlessly after a restart.
+// pool with a job, when it first saw each machine that is on its way out, and the runner configurations of machines
+// that have not claimed theirs yet. All of it is rebuilt or reset harmlessly after a restart.
 type Pool struct {
 	settings Settings
 	machines provider.Provider
@@ -74,6 +74,8 @@ type Pool struct {
 	// fell to 0, or a busy runner.
 	lastActive time.Time
 	held       map[string]held
+	// leaving is when each machine listed stopped, failed or being deleted was first seen so; only Round touches it.
+	leaving map[string]time.Time
 }
 
 // New returns a pool. now is the clock; tests pass their own.
@@ -203,6 +205,9 @@ func (p *Pool) Round(ctx context.Context) (plan.Decision, error) {
 	p.metrics.Spares.WithLabelValues(p.settings.Name).Set(float64(d.Spares.Count))
 	p.dropHeld(o, d)
 	p.report(o)
+	var wait time.Duration
+	p.leaving, wait = plan.Leaving(p.leaving, o)
+	p.metrics.DeletionWait.WithLabelValues(p.settings.Name).Set(wait.Seconds())
 	p.trackUnregistered(o, d)
 	actCtx, cancel := context.WithTimeout(ctx, ActTimeout)
 	p.act(actCtx, d)

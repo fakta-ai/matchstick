@@ -7,6 +7,7 @@ import "github.com/prometheus/client_golang/prometheus"
 type Metrics struct {
 	Demand           *prometheus.GaugeVec
 	Machines         *prometheus.GaugeVec
+	DeletionWait     *prometheus.GaugeVec
 	Runners          *prometheus.GaugeVec
 	Creations        *prometheus.CounterVec
 	CreationFailures *prometheus.CounterVec
@@ -56,7 +57,10 @@ func New(reg prometheus.Registerer) *Metrics {
 	return &Metrics{
 		Demand:   gauge("demand", "Jobs assigned to the pool, waiting or running, as GitHub last reported."),
 		Machines: gauge("machines", "The pool's machines by state.", "state"),
-		Runners:  gauge("runners", "The pool's runner registrations by status (offline, idle, busy).", "status"),
+		DeletionWait: gauge("deletion_wait_seconds",
+			"How long the pool's longest-waiting machine has been stopped, failed or being deleted without being "+
+				"gone, since this process first saw it so; 0 when there is none."),
+		Runners: gauge("runners", "The pool's runner registrations by status (offline, idle, busy).", "status"),
 		Creations: counter("creations_total",
 			"Machines whose creation the cloud accepted."),
 		CreationFailures: counter("creation_failures_total",

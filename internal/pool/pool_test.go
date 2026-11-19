@@ -969,3 +969,28 @@ func TestDeletionWaitIsTheLongestAMachineStaysAfterItStopped(t *testing.T) {
 		t.Fatalf("deletion wait = %v, want 0 once the machine is gone", got)
 	}
 }
+
+// A machine whose job ended is left to power off: while it still runs, within the registration timeout, it is not
+// waiting to be deleted; once the cloud reports it stopped, and it is still there, it is.
+func TestDeletionWaitStartsWhenAMachineWhoseJobEndedStops(t *testing.T) {
+	w := newWorld(t)
+	name := w.longJobs(1)[0]
+	w.round()
+	w.clock.advance(5 * time.Minute)
+	w.round()
+	w.expectMachines(1)
+	if got := w.gauge(w.metrics.DeletionWait); got != 0 {
+		t.Fatalf("deletion wait = %v, want 0 while the machine shuts down", got)
+	}
+
+	w.machines.SetState(name, plan.Stopped)
+	w.machines.Fail("delete", errors.New("refused"))
+	w.round()
+	w.clock.advance(time.Minute)
+	w.machines.Fail("delete", errors.New("refused"))
+	w.round()
+	w.expectMachines(1)
+	if got := w.gauge(w.metrics.DeletionWait); got != 60 {
+		t.Fatalf("deletion wait = %v, want 60 a minute after it was first seen stopped", got)
+	}
+}

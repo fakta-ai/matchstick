@@ -145,10 +145,12 @@ an internal load balancer. On another cloud, give its own internal load balancer
   is quiet past its `idleTimeout` or drains ([spares](configuration.md#spares-and-the-idle-timeout)).
 - `matchstick_deletion_wait_seconds` is how long the pool's longest-waiting machine has been stopped, failed or being
   deleted while the cloud still lists it, counted from the first round of this process that saw it so; 0 when there is
-  none. A machine that powers off after its job is deleted at the next round and gone within a minute or two, so a
-  wait of many minutes is a machine that is not being deleted: the cloud refuses its deletion, or never finishes it,
-  and it keeps billing. `matchstick_machines{state="stopped"}` cannot tell that apart from a busy pool, where some
-  machine has just stopped at almost every round. A restart starts the count again.
+  none. A machine whose job ended is running while it shuts down, and is not counted until the cloud reports it
+  stopped; one that hasn't stopped within the registration timeout is deleted and counts while it is being deleted. A
+  stopped machine is deleted at the next round and gone within a minute or two, so a wait of many minutes is a machine
+  that is not being deleted: the cloud refuses its deletion, or never finishes it, and it keeps billing.
+  `matchstick_machines{state="stopped"}` cannot tell that apart from a busy pool, where some machine has just stopped
+  at almost every round. A restart starts the count again.
 - `matchstick_job_startup_seconds` is a histogram of how long each job waited, from GitHub assigning it to the pool's
   scale set to GitHub assigning it to one of the pool's runners, both times as GitHub's job-started message gives
   them. A job that started on a spare shows seconds; one that waited for its VM to be created shows that wait. The

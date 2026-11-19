@@ -50,12 +50,16 @@ does the rest.
 3. **Run GitHub's runner once** with it, as an unprivileged user: `./run.sh --jitconfig "$jit"`. The runner registers,
    takes one job, and exits; GitHub then removes its registration.
 4. **Power off when the runner exits**, whatever its exit status, and also when step 1, 2 or 3 fails. matchstick
-   deletes a stopped VM on its next round.
+   deletes a stopped VM on its next round. Work the image does between the runner's exit and its power-off, such as
+   sending the job's logs, has the time Timing gives it.
 
 ## Timing
 
 - The runner must be online within the pool's `registrationTimeout` (default 10 minutes) of the VM's creation, or
   matchstick deletes the VM and its registration. matchstick refuses claims after that time.
+- A VM whose runner's job has ended, which matchstick sees as its registration gone, is left to power off: matchstick
+  deletes it at its next round once it stops, or once the pool's `registrationTimeout` has passed since matchstick
+  first saw its registration gone, however long the job ran.
 - A VM older than the pool's `maxLifetime` is deleted whatever it is doing.
 - matchstick holds a VM's configuration in memory only. If it restarts before the VM has claimed, the VM's claim fails
   and the VM powers off; matchstick deletes it and creates a replacement if jobs need one.

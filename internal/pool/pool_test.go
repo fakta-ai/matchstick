@@ -268,9 +268,7 @@ func TestUnregisteredMachineIsDeletedAfterTheTimeout(t *testing.T) {
 	w := newWorld(t)
 	w.pool.SetDemand(1)
 	w.round()
-	name := w.names()[0]
-	w.machines.SetState(name, plan.Running)
-	w.runners.Finish(name) // its registration vanished, and the runner never connected
+	name := w.names()[0] // never boots: still pending, its registration offline
 
 	w.clock.advance(9 * time.Minute)
 	w.round()
@@ -280,6 +278,158 @@ func TestUnregisteredMachineIsDeletedAfterTheTimeout(t *testing.T) {
 	w.round()
 	if names := w.names(); len(names) != 1 || names[0] == name {
 		t.Fatalf("machines = %v: want the unregistered one replaced", names)
+	}
+	if got := w.counter(w.metrics.Deletions, "unregistered"); got != 1 {
+		t.Errorf("unregistered deletions = %v, want 1", got)
+	}
+}
+
+// longJobs starts n jobs on n machines and runs them past the registration timeout, then ends them: GitHub removes
+// each ephemeral registration and the listener reports no more demand. The machines are still running.
+func (w *world) longJobs(n int) []string {
+	w.t.Helper()
+	w.pool.SetDemand(n)
+	w.round()
+	w.boot()
+	names := w.names()
+	for _, name := range names {
+		w.runners.SetRunner(name, true, true)
+	}
+	w.round()
+	w.clock.advance(40 * time.Minute)
+	w.round()
+	w.expectMachines(n)
+	for _, name := range names {
+		w.runners.Finish(name)
+	}
+	w.pool.SetDemand(0)
+	return names
+}
+
+func TestALongJobsMachineIsLeftToPowerOffWhenItsJobEnds(t *testing.T) {
+	w := newWorld(t)
+	name := w.longJobs(1)[0]
+	w.round()
+	w.expectMachines(1) // its image is sending the job's last logs before it powers off
+
+	w.clock.advance(time.Minute)
+	w.machines.SetState(name, plan.Stopped)
+	w.round()
+	w.expectMachines(0)
+	if got := w.counter(w.metrics.Deletions, "finished"); got != 1 {
+		t.Errorf("finished deletions = %v, want 1", got)
+	}
+	if got := w.counter(w.metrics.Deletions, "unregistered"); got != 0 {
+		t.Errorf("unregistered deletions = %v, want 0", got)
+	}
+}
+
+func TestMachinesThatDoNotPowerOffAfterTheirJobsAreDeletedAfterTheTimeout(t *testing.T) {
+	w := newWorld(t)
+	w.longJobs(3)
+	w.round()
+	w.clock.advance(9 * time.Minute)
+	w.round()
+	w.expectMachines(3)
+
+	w.clock.advance(2 * time.Minute)
+	w.round()
+	w.expectMachines(0)
+	if got := w.counter(w.metrics.Deletions, "finished"); got != 3 {
+		t.Errorf("finished deletions = %v, want 3", got)
+	}
+	// They ran their jobs: not machines that never register, so nothing pauses creation.
+	if got := testutil.ToFloat64(w.metrics.CreationPaused.WithLabelValues("build")); got != 0 {
+		t.Errorf("creation paused = %v, want 0", got)
+	}
+	w.pool.SetDemand(1)
+	w.round()
+	w.expectMachines(1)
+}
+
+func TestAfterARestartTheTimeoutToPowerOffStartsAgain(t *testing.T) {
+	w := newWorld(t)
+	w.longJobs(1)
+	w.round()
+	w.clock.advance(5 * time.Minute)
+	w.restart()
+	w.pool.SetDemand(0)
+	w.round()
+	w.clock.advance(9 * time.Minute)
+	w.round()
+	w.expectMachines(1)
+	w.clock.advance(2 * time.Minute)
+	w.round()
+	w.expectMachines(0)
+}
+
+func TestAMachineWhoseJobEndedIsNoSpare(t *testing.T) {
+	w := newWorldWith(t, idleSettings())
+	w.pool.SetDemand(1)
+	w.round() // the job's machine and the spare
+	w.boot()
+	job := w.startJob()
+	w.round()
+	w.clock.advance(40 * time.Minute)
+	w.round()
+	w.runners.Finish(job)
+	w.pool.SetDemand(0)
+	w.round()
+
+	// The job's machine powers off; the spare, the one runner that can take the next job, stays.
+	w.expectMachines(2)
+	if got := w.counter(w.metrics.Deletions, "surplus"); got != 0 {
+		t.Errorf("surplus deletions = %v, want 0: the spare was deleted", got)
+	}
+	// The machine powering off is running in the cloud and has no registration: it is no idle runner.
+	if got := testutil.ToFloat64(w.metrics.Machines.WithLabelValues("build", "running")); got != 2 {
+		t.Errorf("running machines = %v, want 2", got)
+	}
+	if got := testutil.ToFloat64(w.metrics.Runners.WithLabelValues("build", "idle")); got != 1 {
+		t.Errorf("idle runners = %v, want 1", got)
+	}
+	if got := w.gauge(w.metrics.Spares); got != 1 {
+		t.Errorf("spares = %v, want 1", got)
+	}
+
+	w.clock.advance(30 * time.Second)
+	w.machines.SetState(job, plan.Stopped)
+	w.round()
+	if names := w.names(); len(names) != 1 || names[0] == job {
+		t.Fatalf("machines = %v: want the spare alone", names)
+	}
+	w.startJob() // the next job starts on the spare at once
+}
+
+func TestAQueuedJobGetsAMachineWhileTheLastOnePowersOff(t *testing.T) {
+	w := newWorld(t)
+	ended := w.longJobs(1)[0]
+	w.pool.SetDemand(1) // the next job was queued as the last one ended
+	w.round()
+	w.expectMachines(2)
+	w.boot()
+	w.startJob()
+	if got := w.counter(w.metrics.Deletions, "unregistered"); got != 0 {
+		t.Errorf("unregistered deletions = %v, want 0", got)
+	}
+	w.machines.SetState(ended, plan.Stopped)
+	w.round()
+	w.expectMachines(1)
+}
+
+func TestAMachineWhoseJobEndedCountsTowardTheMaximum(t *testing.T) {
+	s := settings
+	s.Limits.Maximum = 1
+	w := newWorldWith(t, s)
+	ended := w.longJobs(1)[0]
+	w.pool.SetDemand(1)
+	w.round()
+	w.expectMachines(1) // the next job waits until the machine powering off is gone
+	w.machines.SetState(ended, plan.Stopped)
+	w.round() // deletes it
+	w.round() // creates the next
+	if names := w.names(); len(names) != 1 || names[0] == ended {
+		t.Fatalf("machines = %v: want one new machine", names)
 	}
 }
 
@@ -306,8 +456,7 @@ func TestMachinesThatNeverRegisterPauseCreation(t *testing.T) {
 	w.pool.SetDemand(3)
 	w.round()
 	for _, m := range w.machineList() {
-		w.machines.SetState(m.Name, plan.Running)
-		w.runners.Finish(m.Name)
+		w.machines.SetState(m.Name, plan.Running) // boots, but its runner never comes online
 	}
 	w.clock.advance(11 * time.Minute)
 	w.round()

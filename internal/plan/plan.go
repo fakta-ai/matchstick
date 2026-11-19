@@ -73,6 +73,11 @@ type Observation struct {
 	// Started is when the pool's process started. A machine created before it stands for a job the process did not
 	// see: the pool had a job, or kept its spares, when that machine was created.
 	Started time.Time `json:"started,omitzero"`
+	// Deregistered is when the pool's process first saw each running machine without its runner's registration.
+	// GitHub removes a just-in-time runner's registration when its job ends, so such a machine has run its job and is
+	// on its way to power off. A running machine without its registration that is missing here counts from its
+	// creation.
+	Deregistered map[string]time.Time `json:"deregistered,omitempty"`
 }
 
 // SparesReason says why the pool keeps the spares it keeps now.
@@ -138,12 +143,13 @@ func SparesNow(o Observation, l Limits) Spares {
 type Reason string
 
 const (
-	// Finished means the machine stopped or failed.
+	// Finished means the machine stopped or failed, or its runner's job ended (GitHub removed its registration) and
+	// the machine has not stopped within the registration timeout since.
 	Finished Reason = "finished"
 	// Expired means the machine outlived the pool's maximum lifetime.
 	Expired Reason = "expired"
-	// Unregistered means the machine's runner is not connected to GitHub (no registration, or an offline one) past
-	// the registration timeout.
+	// Unregistered means the machine's runner did not come online within the registration timeout: the machine is
+	// still pending, or its registration is offline and idle.
 	Unregistered Reason = "unregistered"
 	// Orphan means the registration has no machine.
 	Orphan Reason = "orphan"
@@ -179,7 +185,8 @@ type Decision struct {
 	Wanted int `json:"wanted"`
 	// Spares is how many idle machines the pool keeps ready now, and why; part of Wanted.
 	Spares Spares `json:"spares"`
-	// Serving counts machines pending or running that this decision keeps.
+	// Serving counts machines pending or running that this decision keeps and that can take a job: a running machine
+	// whose job ended (its registration gone) is left to power off and counts only in Present.
 	Serving int `json:"serving"`
 	// Present counts every machine listed, which all count against the maximum until they are gone.
 	Present int `json:"present"`
@@ -207,6 +214,13 @@ func Decide(o Observation, l Limits) Decision {
 			deletion.Reason = Finished
 		case !m.ExpiresAt.IsZero() && !o.Now.Before(m.ExpiresAt):
 			deletion.Reason = Expired
+		case o.Runners != nil && m.State == Running && !registered:
+			// Its job ended: wait for the image to power the machine off, for at most the registration timeout. It
+			// counts toward the maximum (Present) but serves nothing: no job, no spare, no surplus.
+			if o.Now.Sub(deregisteredAt(o, m)) <= timeout {
+				continue
+			}
+			deletion.Reason = Finished
 		case o.Runners != nil && (!registered || !r.Online && !r.Busy) && o.Now.Sub(m.CreatedAt) > timeout:
 			deletion.Reason = Unregistered
 		default:
@@ -257,4 +271,39 @@ func Decide(o Observation, l Limits) Decision {
 		d.Create = max(0, min(d.Wanted-d.Serving, l.Maximum-d.Present))
 	}
 	return d
+}
+
+// deregisteredAt is when the pool first saw the running machine m without its registration, or m's creation if the
+// observation doesn't say.
+func deregisteredAt(o Observation, m Machine) time.Time {
+	if at, ok := o.Deregistered[m.Name]; ok {
+		return at
+	}
+	return m.CreatedAt
+}
+
+// Deregistered returns when each running machine the observation lists without its runner's registration was first
+// seen so: its time in since, or now for one seen so for the first time. Machines with their registration, not
+// running, or no longer listed are left out. Without the runner list it returns since unchanged, as nothing can be
+// told.
+func Deregistered(since map[string]time.Time, o Observation) map[string]time.Time {
+	if o.Runners == nil {
+		return since
+	}
+	registered := make(map[string]bool, len(o.Runners))
+	for _, r := range o.Runners {
+		registered[r.Name] = true
+	}
+	deregistered := map[string]time.Time{}
+	for _, m := range o.Machines {
+		if m.State != Running || registered[m.Name] {
+			continue
+		}
+		first, seen := since[m.Name]
+		if !seen {
+			first = o.Now
+		}
+		deregistered[m.Name] = first
+	}
+	return deregistered
 }

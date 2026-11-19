@@ -100,7 +100,7 @@ Virtual Machine Contributor and Network Contributor on the resource group also c
 | `spares` | 0 | idle machines kept ready beyond demand, at most `maximum` ([spares](#spares-and-the-idle-timeout)) |
 | `idleTimeout` | none | keep the spares only while the pool has a job and for this long after its last job ended, such as `30m`; without it, the spares are kept at all times. Needs `spares` |
 | `maxLifetime` | `6h` | a machine older than this is deleted, job or not |
-| `registrationTimeout` | `10m` | a machine whose runner is not online by then is deleted; a registration without a machine for this long is removed |
+| `registrationTimeout` | `10m` | a machine whose runner is not online by then is deleted; a machine whose runner's job has ended gets as long again to power off, from when matchstick first sees its registration gone; a registration without a machine for this long is removed |
 | `azure.size` | required | the VM size, such as `Standard_D4ads_v5` |
 | `azure.image` | required | a Compute Gallery image version's resource ID, or an image definition's for its latest version |
 | `azure.identity` | none | a user-assigned managed identity's resource ID for the VMs |

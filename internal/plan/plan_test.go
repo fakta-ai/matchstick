@@ -82,12 +82,23 @@ func TestDecide(t *testing.T) {
 			want: Decision{Create: 1, Wanted: 1, Present: 1, Deletions: []Deletion{{Machine: "a", Reason: Expired, RunnerID: 1}}},
 		},
 		{
-			name: "unregistered: a machine past the registration timeout without a registration",
+			name: "unregistered: a machine still pending past the registration timeout",
 			obs: Observation{Now: now, Demand: new(2), Runners: []Runner{},
-				Machines: []Machine{machine("a", Running, 11*time.Minute), machine("b", Pending, 11*time.Minute),
-					machine("c", Running, 9*time.Minute)}},
-			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 3, Deletions: []Deletion{
-				{Machine: "a", Reason: Unregistered}, {Machine: "b", Reason: Unregistered}}},
+				Machines: []Machine{machine("a", Pending, 11*time.Minute), machine("b", Pending, 9*time.Minute)}},
+			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 2, Deletions: []Deletion{
+				{Machine: "a", Reason: Unregistered}}},
+		},
+		{
+			// GitHub removes a just-in-time runner's registration when its job ends, however long the job ran.
+			name: "a running machine whose registration is gone ran its job: kept to power off, for the timeout",
+			obs: Observation{Now: now, Demand: new(0), Runners: []Runner{},
+				Machines: []Machine{machine("ended", Running, 40*time.Minute),
+					machine("powering-off", Running, 40*time.Minute), machine("lingering", Running, 40*time.Minute),
+					machine("unseen", Running, 11*time.Minute)},
+				Deregistered: map[string]time.Time{"ended": now, "powering-off": ago(9 * time.Minute),
+					"lingering": ago(11 * time.Minute)}},
+			want: Decision{Serving: 2, Present: 4, Deletions: []Deletion{
+				{Machine: "lingering", Reason: Finished}, {Machine: "unseen", Reason: Finished}}},
 		},
 		{
 			name: "unregistered: a machine whose runner never came online, with its registration",
@@ -221,6 +232,24 @@ func TestDecisionJSON(t *testing.T) {
 	}
 }
 
+func TestDeregistered(t *testing.T) {
+	o := Observation{Now: now,
+		Machines: []Machine{machine("seen", Running, time.Hour), machine("new", Running, time.Hour),
+			machine("registered", Running, time.Hour), machine("booting", Pending, time.Minute),
+			machine("stopped", Stopped, time.Hour)},
+		Runners: []Runner{runner(1, "registered", time.Hour, true)}}
+	since := map[string]time.Time{"seen": ago(5 * time.Minute), "registered": ago(time.Minute), "gone": ago(time.Hour)}
+	want := map[string]time.Time{"seen": ago(5 * time.Minute), "new": now}
+	if got := Deregistered(since, o); !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	// Without the runner list nothing can be told: the record stays as it was.
+	o.Runners = nil
+	if got := Deregistered(since, o); !reflect.DeepEqual(got, since) {
+		t.Errorf("without the runner list: got %v, want %v", got, since)
+	}
+}
+
 // idle is a pool that keeps two spares while it has jobs and for 30 minutes after the last.
 var idle = Limits{Maximum: 4, Spares: 2, RegistrationTimeout: Duration(10 * time.Minute),
 	IdleTimeout: Duration(30 * time.Minute)}
@@ -334,11 +363,12 @@ func TestIdleTimeout(t *testing.T) {
 		{
 			name: "a spare that never registers is replaced while the window is open",
 			obs: Observation{Now: now, Demand: new(0), LastActive: ago(5 * time.Minute),
-				Machines: []Machine{machine("s1", Running, 11*time.Minute), s2}, Runners: []Runner{r2}},
+				Machines: []Machine{machine("s1", Running, 11*time.Minute), s2},
+				Runners:  []Runner{{ID: 3, Name: "s1", CreatedAt: ago(11 * time.Minute)}, r2}},
 			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 2,
 				Spares: Spares{Count: 2, Reason: SparesRecent, LastActive: ago(5 * time.Minute),
 					Until: now.Add(25 * time.Minute)},
-				Deletions: []Deletion{{Machine: "s1", Reason: Unregistered}}},
+				Deletions: []Deletion{{Machine: "s1", Reason: Unregistered, RunnerID: 3}}},
 		},
 		{
 			name: "after a restart, the newest machine made before it stands for the last job",

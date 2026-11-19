@@ -21,6 +21,17 @@ versions follow [Semantic Versioning](https://semver.org/).
 - A release waits only for an end-to-end status whose description names the staged chart's digest; a status left on
   the same commit by an earlier run no longer counts.
 
+### Fixed
+
+- A machine whose job ran past the pool's `registrationTimeout` is no longer deleted as `unregistered` the moment the
+  job ends. GitHub removes a just-in-time runner's registration when its job ends, and the round that follows deleted
+  the still-running machine at once, cutting short what the image does before it powers off (such as sending the
+  job's last logs), counting it in `matchstick_deletions_total{reason="unregistered"}` and toward the pause after
+  machines that never register. Such a machine is now left to power off and deleted as `finished`: once it stops, or
+  once `registrationTimeout` has passed since matchstick first saw its registration gone. `unregistered` now counts
+  only machines whose runner never came online: still pending, or with an offline, idle registration. The planner's
+  observation takes `deregistered`, when each running machine was first seen without its registration.
+
 ## [0.6.0] - 2026-11-18
 
 ### Added

@@ -185,7 +185,8 @@ type Decision struct {
 	Wanted int `json:"wanted"`
 	// Spares is how many idle machines the pool keeps ready now, and why; part of Wanted.
 	Spares Spares `json:"spares"`
-	// Serving counts machines pending or running that this decision keeps.
+	// Serving counts machines pending or running that this decision keeps and that can take a job: a running machine
+	// whose job ended (its registration gone) is left to power off and counts only in Present.
 	Serving int `json:"serving"`
 	// Present counts every machine listed, which all count against the maximum until they are gone.
 	Present int `json:"present"`
@@ -214,9 +215,9 @@ func Decide(o Observation, l Limits) Decision {
 		case !m.ExpiresAt.IsZero() && !o.Now.Before(m.ExpiresAt):
 			deletion.Reason = Expired
 		case o.Runners != nil && m.State == Running && !registered:
-			// Its job ended: wait for the image to power the machine off, for at most the registration timeout.
+			// Its job ended: wait for the image to power the machine off, for at most the registration timeout. It
+			// counts toward the maximum (Present) but serves nothing: no job, no spare, no surplus.
 			if o.Now.Sub(deregisteredAt(o, m)) <= timeout {
-				serving = append(serving, m)
 				continue
 			}
 			deletion.Reason = Finished

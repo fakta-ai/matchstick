@@ -49,7 +49,7 @@ func TestDecide(t *testing.T) {
 		},
 		{
 			name: "never exceeds the maximum while machines are being deleted",
-			obs: Observation{Now: now, Demand: new(4), Runners: []Runner{},
+			obs: Observation{Now: now, Demand: new(4), Runners: []Runner{runner(3, "c", time.Minute, true)},
 				Machines: []Machine{machine("a", Deleting, time.Hour), machine("b", Stopped, time.Hour),
 					machine("c", Running, time.Minute)}},
 			want: Decision{Create: 1, Wanted: 4, Serving: 1, Present: 3,
@@ -97,8 +97,40 @@ func TestDecide(t *testing.T) {
 					machine("unseen", Running, 11*time.Minute)},
 				Deregistered: map[string]time.Time{"ended": now, "powering-off": ago(9 * time.Minute),
 					"lingering": ago(11 * time.Minute)}},
-			want: Decision{Serving: 2, Present: 4, Deletions: []Deletion{
+			want: Decision{Present: 4, Deletions: []Deletion{
 				{Machine: "lingering", Reason: Finished}, {Machine: "unseen", Reason: Finished}}},
+		},
+		{
+			name:   "a machine whose job ended is no spare: the real spare is kept, not deleted as surplus",
+			limits: Limits{Maximum: 4, Spares: 1, RegistrationTimeout: limits.RegistrationTimeout},
+			obs: Observation{Now: now, Demand: new(0),
+				Machines: []Machine{machine("ended", Running, 40*time.Minute),
+					machine("spare", Running, 5*time.Minute)},
+				Runners:      []Runner{runner(1, "spare", 5*time.Minute, false)},
+				Deregistered: map[string]time.Time{"ended": now}},
+			want: Decision{Wanted: 1, Serving: 1, Present: 2},
+		},
+		{
+			name: "a machine whose job ended serves no queued job: a replacement is created within the maximum",
+			obs: Observation{Now: now, Demand: new(1), Runners: []Runner{},
+				Machines:     []Machine{machine("ended", Running, 40*time.Minute)},
+				Deregistered: map[string]time.Time{"ended": now}},
+			want: Decision{Create: 1, Wanted: 1, Present: 1},
+		},
+		{
+			name:   "a machine whose job ended still counts toward the maximum",
+			limits: Limits{Maximum: 1, RegistrationTimeout: limits.RegistrationTimeout},
+			obs: Observation{Now: now, Demand: new(1), Runners: []Runner{},
+				Machines:     []Machine{machine("ended", Running, 40*time.Minute)},
+				Deregistered: map[string]time.Time{"ended": now}},
+			want: Decision{Wanted: 1, Present: 1},
+		},
+		{
+			name: "draining leaves a machine whose job ended to power off",
+			obs: Observation{Now: now, Demand: new(1), Draining: true, Runners: []Runner{},
+				Machines:     []Machine{machine("ended", Running, 40*time.Minute)},
+				Deregistered: map[string]time.Time{"ended": now}},
+			want: Decision{Present: 1},
 		},
 		{
 			name: "unregistered: a machine whose runner never came online, with its registration",
@@ -300,6 +332,15 @@ func TestIdleTimeout(t *testing.T) {
 				Machines: []Machine{s1, s2}, Runners: []Runner{r1, r2}},
 			want: Decision{Wanted: 2, Serving: 2, Present: 2, Spares: Spares{Count: 2, Reason: SparesRecent,
 				LastActive: ago(29 * time.Minute), Until: now.Add(time.Minute)}},
+		},
+		{
+			name: "right after a job: its machine powering off is no spare, and neither spare goes as surplus",
+			obs: Observation{Now: now, Demand: new(0), LastActive: ago(time.Minute),
+				Machines:     []Machine{machine("ended", Running, 40*time.Minute), s1, s2},
+				Runners:      []Runner{r1, r2},
+				Deregistered: map[string]time.Time{"ended": ago(time.Minute)}},
+			want: Decision{Wanted: 2, Serving: 2, Present: 3, Spares: Spares{Count: 2, Reason: SparesRecent,
+				LastActive: ago(time.Minute), Until: now.Add(29 * time.Minute)}},
 		},
 		{
 			name: "once quiet for the idle timeout, the idle spares go, oldest first, guarded",

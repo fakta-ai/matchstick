@@ -279,9 +279,11 @@ Counting:
   is the later of `lastActive` and the creation of the newest machine created before `started`: after a restart, such
   a machine shows that the pool had a job or kept spares when it was made. Machines created since the start are no
   such evidence, so a spare replaced in the window does not extend it.
-- `serving` = machines pending or running that no rule deletes, including a running machine whose job ended while it
-  powers off.
-- `present` = every machine listed, in any state, including those being deleted.
+- `serving` = machines pending or running that no rule deletes and that can take a job. A running machine whose job
+  ended (its registration gone) is left to power off and is not serving: it meets no demand, is no spare and is never
+  deleted as surplus, so a job queued meanwhile gets a new machine within the maximum.
+- `present` = every machine listed, in any state, including those being deleted and those powering off after their
+  job.
 - creates = `min(wanted − serving, maximum − present)`, at least 0; none while demand is unknown or creation is paused.
 - surplus deletions happen only when demand is known or the pool drains.
 - machines being deleted are left alone but counted in `present`.

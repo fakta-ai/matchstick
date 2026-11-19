@@ -1,10 +1,10 @@
 # Architecture
 
 matchstick gives every GitHub Actions job a fresh cloud virtual machine and deletes the machine when the job is done.
-It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, and the three
-things it holds besides, each waiting machine's runner configuration, when it last saw each pool with a job, and when
-it first saw each machine on its way out, live only in its memory. This document describes the code as it is, for
-people changing it.
+It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, and what it
+holds besides lives only in its memory: each waiting machine's runner configuration, when it last saw each pool with a
+job, when it first saw each running machine without its runner's registration, and when it first saw each machine on
+its way out. This document describes the code as it is, for people changing it.
 
 ## Packages
 
@@ -255,14 +255,18 @@ delete and registrations to remove, each with a reason, and how many machines to
 The observation holds the current time, the pool's machines (name, state, creation time, expiry), its runner
 registrations (id, name, creation time from the name, online, busy) or `null` when GitHub's list could not be read,
 its demand (jobs assigned, waiting or running) or `null` when unknown, whether the pool drains, whether creation is
-paused, when the process last saw the pool with a job (`lastActive`), and when the process started (`started`). The
-limits are the maximum number of machines, the number of idle spares, the registration timeout, and the idle timeout.
+paused, when the process last saw the pool with a job (`lastActive`), when the process started (`started`), and when
+it first saw each running machine without its runner's registration (`deregistered`). The limits are the maximum
+number of machines, the number of idle spares, the registration timeout, and the idle timeout.
+
+GitHub removes a just-in-time runner's registration when its job ends, so a running machine without its registration
+has run its job, however long that took, and is on its way to power off.
 
 | Rule | Condition | Action |
 |---|---|---|
-| finished | machine stopped or failed | remove its registration if any, delete the machine |
+| finished | machine stopped or failed; or running without its registration for longer than the registration timeout since `deregistered` (its creation if the observation has no time for it): its job ended and it did not power off | remove its registration if any, delete the machine |
 | expired | now is past the machine's expiry | remove its registration if any, delete the machine, even mid-job |
-| unregistered | machine older than the registration timeout, and its runner has no registration or an offline, idle one | remove the registration if any, delete the machine |
+| unregistered | machine older than the registration timeout whose runner never came online: still pending, or its registration offline and idle | remove the registration if any, delete the machine |
 | orphan | registration older than the registration timeout with no machine of its name | remove the registration |
 | surplus | more serving machines than wanted | for idle, online registrations, oldest first: remove the registration, then delete the machine (guarded) |
 | needed | fewer serving machines than wanted | create machines |
@@ -276,8 +280,11 @@ Counting:
   is the later of `lastActive` and the creation of the newest machine created before `started`: after a restart, such
   a machine shows that the pool had a job or kept spares when it was made. Machines created since the start are no
   such evidence, so a spare replaced in the window does not extend it.
-- `serving` = machines pending or running that no rule deletes.
-- `present` = every machine listed, in any state, including those being deleted.
+- `serving` = machines pending or running that no rule deletes and that can take a job. A running machine whose job
+  ended (its registration gone) is left to power off and is not serving: it meets no demand, is no spare and is never
+  deleted as surplus, so a job queued meanwhile gets a new machine within the maximum.
+- `present` = every machine listed, in any state, including those being deleted and those powering off after their
+  job.
 - creates = `min(wanted − serving, maximum − present)`, at least 0; none while demand is unknown or creation is paused.
 - surplus deletions happen only when demand is known or the pool drains.
 - machines being deleted are left alone but counted in `present`.
@@ -314,13 +321,18 @@ Creation pauses, in memory:
 The pool's last activity, in memory: `SetDemand` records the time when demand is above 0 and when it falls to 0 (the
 end of the last job), and each round keeps the later of that and the decision's `spares.lastActive`.
 
+When the pool first saw each running machine without its runner's registration, in memory (`plan.Deregistered`, kept
+by each round): a machine that has its registration again, stops or goes is dropped from it.
+
 Machines on their way out, in memory: each round records when it first saw each listed machine stopped, failed or
 being deleted (`plan.Leaving`), forgets those no longer listed, and reports the longest wait as
-`matchstick_deletion_wait_seconds`. A round that cannot list the machines leaves it as it was.
+`matchstick_deletion_wait_seconds`. A machine whose job ended and that is still shutting down is running, so it isn't
+on its way out until the cloud reports it stopped. A round that cannot list the machines leaves it as it was.
 
-A new `Pool` over the same cloud and GitHub starts with demand unknown, no configurations, no last activity and no
-machines on their way out (it counts their wait from its first round): its first round cleans up (finished, expired,
-unregistered, orphan) and creates nothing until demand is set.
+A new `Pool` over the same cloud and GitHub starts with demand unknown, no configurations, no last activity, no
+deregistration times (a running machine without its registration then has the registration timeout from the first
+round) and no machines on their way out (it counts their wait from its first round): its first round cleans up
+(finished, expired, unregistered, orphan) and creates nothing until demand is set.
 
 ## Operations
 

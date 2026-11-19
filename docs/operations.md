@@ -133,6 +133,10 @@ an internal load balancer. On another cloud, give its own internal load balancer
   (`released`, `refused`, `failed`), `matchstick_spares`, `matchstick_job_startup_seconds`, each with a `pool` label;
   `matchstick_claim_probes_total`, connections to the claim endpoint that closed before sending a byte, such as the
   claim Service's load balancer health probe.
+- A machine whose job has ended and that is powering off counts in `matchstick_machines{state="running"}` until the
+  cloud reports it stopped, and in no status of `matchstick_runners`: GitHub has removed its registration. So it is
+  never an idle runner, and a gap between running machines and registrations of up to the machines that just
+  finished their jobs is normal.
 - `matchstick_listening` is 1 while the pool's listener holds a message session for its scale set, and 0 from the
   start until the first session opens and whenever one has ended: while its scale set is not in its runner group,
   while GitHub refuses or drops the session. While it is 0 the pool learns of no new jobs, so they queue on GitHub

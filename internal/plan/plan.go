@@ -307,3 +307,23 @@ func Deregistered(since map[string]time.Time, o Observation) map[string]time.Tim
 	}
 	return deregistered
 }
+
+// Leaving returns when each machine the observation lists stopped, failed or being deleted was first seen so (its time
+// in since, or now for one seen so for the first time), and how long the longest-waiting of them has waited; zero when
+// there is none. Machines no longer listed, or listed pending or running, are left out.
+func Leaving(since map[string]time.Time, o Observation) (map[string]time.Time, time.Duration) {
+	leaving := map[string]time.Time{}
+	var longest time.Duration
+	for _, m := range o.Machines {
+		if m.State != Stopped && m.State != Failed && m.State != Deleting {
+			continue
+		}
+		first, seen := since[m.Name]
+		if !seen {
+			first = o.Now
+		}
+		leaving[m.Name] = first
+		longest = max(longest, o.Now.Sub(first))
+	}
+	return leaving, longest
+}

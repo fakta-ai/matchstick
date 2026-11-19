@@ -917,3 +917,80 @@ matchstick_job_startup_seconds_count{pool="build"} 2
 		t.Error(err)
 	}
 }
+
+// A machine that stopped and stays (its deletion refused, then under way and never finishing) is the pool's deletion
+// wait while other machines' jobs come and go; it is 0 again once the machine is gone. A restart counts from its own
+// first sight.
+func TestDeletionWaitIsTheLongestAMachineStaysAfterItStopped(t *testing.T) {
+	w := newWorld(t)
+	w.pool.SetDemand(1)
+	w.round()
+	w.boot()
+	stuck := w.startJob()
+	w.finishJob(stuck)
+	w.machines.Fail("delete", errors.New("refused"))
+	w.round()
+	if got := w.gauge(w.metrics.DeletionWait); got != 0 {
+		t.Fatalf("deletion wait = %v, want 0 when first seen stopped", got)
+	}
+
+	w.clock.advance(time.Minute)
+	w.machines.SetState(stuck, plan.Deleting) // the cloud took the deletion and never finishes it
+	w.round()
+	for i := range 4 {
+		w.clock.advance(4 * time.Minute)
+		w.boot()
+		w.finishJob(w.startJob())
+		w.round()
+		if got := w.counter(w.metrics.Deletions, "finished"); got != float64(i+1) {
+			t.Fatalf("finished deletions = %v, want %d: the other machines turn over", got, i+1)
+		}
+	}
+	if got := w.gauge(w.metrics.DeletionWait); got != 17*60 {
+		t.Fatalf("deletion wait = %v, want 1020 (17 minutes since it stopped)", got)
+	}
+
+	w.restart()
+	w.round()
+	if got := w.gauge(w.metrics.DeletionWait); got != 0 {
+		t.Fatalf("deletion wait after a restart = %v, want 0", got)
+	}
+	w.clock.advance(time.Minute)
+	w.round()
+	if got := w.gauge(w.metrics.DeletionWait); got != 60 {
+		t.Fatalf("deletion wait = %v, want 60", got)
+	}
+
+	if err := w.machines.Delete(context.Background(), stuck); err != nil {
+		t.Fatal(err)
+	}
+	w.round()
+	if got := w.gauge(w.metrics.DeletionWait); got != 0 {
+		t.Fatalf("deletion wait = %v, want 0 once the machine is gone", got)
+	}
+}
+
+// A machine whose job ended is left to power off: while it still runs, within the registration timeout, it is not
+// waiting to be deleted; once the cloud reports it stopped, and it is still there, it is.
+func TestDeletionWaitStartsWhenAMachineWhoseJobEndedStops(t *testing.T) {
+	w := newWorld(t)
+	name := w.longJobs(1)[0]
+	w.round()
+	w.clock.advance(5 * time.Minute)
+	w.round()
+	w.expectMachines(1)
+	if got := w.gauge(w.metrics.DeletionWait); got != 0 {
+		t.Fatalf("deletion wait = %v, want 0 while the machine shuts down", got)
+	}
+
+	w.machines.SetState(name, plan.Stopped)
+	w.machines.Fail("delete", errors.New("refused"))
+	w.round()
+	w.clock.advance(time.Minute)
+	w.machines.Fail("delete", errors.New("refused"))
+	w.round()
+	w.expectMachines(1)
+	if got := w.gauge(w.metrics.DeletionWait); got != 60 {
+		t.Fatalf("deletion wait = %v, want 60 a minute after it was first seen stopped", got)
+	}
+}

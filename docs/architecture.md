@@ -1,9 +1,10 @@
 # Architecture
 
 matchstick gives every GitHub Actions job a fresh cloud virtual machine and deletes the machine when the job is done.
-It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, and the two
-things it holds besides, each waiting machine's runner configuration and when it last saw each pool with a job, live
-only in its memory. This document describes the code as it is, for people changing it.
+It keeps no records of its own: what exists in the cloud and what GitHub reports are the whole picture, and what it
+holds besides lives only in its memory: each waiting machine's runner configuration, when it last saw each pool with a
+job, when it first saw each running machine without its runner's registration, and when it first saw each machine on
+its way out. This document describes the code as it is, for people changing it.
 
 ## Packages
 
@@ -323,9 +324,15 @@ end of the last job), and each round keeps the later of that and the decision's 
 When the pool first saw each running machine without its runner's registration, in memory (`plan.Deregistered`, kept
 by each round): a machine that has its registration again, stops or goes is dropped from it.
 
-A new `Pool` over the same cloud and GitHub starts with demand unknown, no configurations, no last activity and no
+Machines on their way out, in memory: each round records when it first saw each listed machine stopped, failed or
+being deleted (`plan.Leaving`), forgets those no longer listed, and reports the longest wait as
+`matchstick_deletion_wait_seconds`. A machine whose job ended and that is still shutting down is running, so it isn't
+on its way out until the cloud reports it stopped. A round that cannot list the machines leaves it as it was.
+
+A new `Pool` over the same cloud and GitHub starts with demand unknown, no configurations, no last activity, no
 deregistration times (a running machine without its registration then has the registration timeout from the first
-round): its first round cleans up (finished, expired, unregistered, orphan) and creates nothing until demand is set.
+round) and no machines on their way out (it counts their wait from its first round): its first round cleans up
+(finished, expired, unregistered, orphan) and creates nothing until demand is set.
 
 ## Operations
 
@@ -395,10 +402,11 @@ lists every field.
 
 ## Metrics
 
-Per pool: demand, machines by state, registrations by status, creations, creation failures by kind, deletions and
-removals by reason, rounds by result, round duration, time of the last successful round, creation paused, draining,
-listening (holding a message session), claims by result, spares kept now, and a histogram of how long jobs waited
-for a runner. For the claim endpoint: connections closed before their first byte.
+Per pool: demand, machines by state, how long the longest-waiting machine has been on its way out (stopped, failed or
+being deleted), registrations by status, creations, creation failures by kind, deletions and removals by reason,
+rounds by result, round duration, time of the last successful round, creation paused, draining, listening (holding a
+message session), claims by result, spares kept now, and a histogram of how long jobs waited for a runner. For the
+claim endpoint: connections closed before their first byte.
 
 ## Limits
 

@@ -125,12 +125,12 @@ an internal load balancer. On another cloud, give its own internal load balancer
 
 - `/healthz` on `listen.metrics`: 200 while every pool has gathered its machines within three intervals plus five
   minutes (a round's actions take at most five minutes).
-- `/metrics`: `matchstick_demand`, `matchstick_machines{state}`, `matchstick_runners{status}`,
-  `matchstick_creations_total`, `matchstick_creation_failures_total{kind}`, `matchstick_deletions_total{reason}`,
-  `matchstick_registration_removals_total{reason}`, `matchstick_rounds_total{result}`,
-  `matchstick_round_duration_seconds`, `matchstick_last_success_timestamp_seconds`, `matchstick_creation_paused`,
-  `matchstick_draining`, `matchstick_listening`, `matchstick_claims_total{result}` (`released`, `refused`,
-  `failed`), `matchstick_spares`, `matchstick_job_startup_seconds`, each with a `pool` label;
+- `/metrics`: `matchstick_demand`, `matchstick_machines{state}`, `matchstick_deletion_wait_seconds`,
+  `matchstick_runners{status}`, `matchstick_creations_total`, `matchstick_creation_failures_total{kind}`,
+  `matchstick_deletions_total{reason}`, `matchstick_registration_removals_total{reason}`,
+  `matchstick_rounds_total{result}`, `matchstick_round_duration_seconds`, `matchstick_last_success_timestamp_seconds`,
+  `matchstick_creation_paused`, `matchstick_draining`, `matchstick_listening`, `matchstick_claims_total{result}`
+  (`released`, `refused`, `failed`), `matchstick_spares`, `matchstick_job_startup_seconds`, each with a `pool` label;
   `matchstick_claim_probes_total`, connections to the claim endpoint that closed before sending a byte, such as the
   claim Service's load balancer health probe.
 - A machine whose job has ended and that is powering off counts in `matchstick_machines{state="running"}` until the
@@ -143,6 +143,14 @@ an internal load balancer. On another cloud, give its own internal load balancer
   with no machine made for them. A pool of a `fake` configuration has no listener and no such series.
 - `matchstick_spares` is how many idle machines the pool keeps ready now beyond its jobs: its `spares`, or 0 while it
   is quiet past its `idleTimeout` or drains ([spares](configuration.md#spares-and-the-idle-timeout)).
+- `matchstick_deletion_wait_seconds` is how long the pool's longest-waiting machine has been stopped, failed or being
+  deleted while the cloud still lists it, counted from the first round of this process that saw it so; 0 when there is
+  none. A machine whose job ended is running while it shuts down, and is not counted until the cloud reports it
+  stopped; one that hasn't stopped within the registration timeout is deleted and counts while it is being deleted. A
+  stopped machine is deleted at the next round and gone within a minute or two, so a wait of many minutes is a machine
+  that is not being deleted: the cloud refuses its deletion, or never finishes it, and it keeps billing.
+  `matchstick_machines{state="stopped"}` cannot tell that apart from a busy pool, where some machine has just stopped
+  at almost every round. A restart starts the count again.
 - `matchstick_job_startup_seconds` is a histogram of how long each job waited, from GitHub assigning it to the pool's
   scale set to GitHub assigning it to one of the pool's runners, both times as GitHub's job-started message gives
   them. A job that started on a spare shows seconds; one that waited for its VM to be created shows that wait. The
@@ -156,6 +164,7 @@ an internal load balancer. On another cloud, give its own internal load balancer
 
 Suggested alerts: `time() - matchstick_last_success_timestamp_seconds > 300`; `matchstick_creation_paused == 1` for
 more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"}[1h]) > 3`;
+`matchstick_deletion_wait_seconds > 900`, a machine stopped, failed or being deleted for 15 minutes and still there;
 `max_over_time(matchstick_listening[10m]) == 0`, a pool that has not listened for 10 minutes (a session that ends is
 reopened after a backoff that starts at 5 seconds, so a brief 0 does not fire it);
 `min_over_time(matchstick_runners{status="idle"}[30m]) > ignoring(status) max_over_time(matchstick_spares[30m])`, a

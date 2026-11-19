@@ -7,6 +7,10 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `matchstick_deletion_wait_seconds`, per pool: how long its longest-waiting machine has been stopped, failed or
+  being deleted while the cloud still lists it, from the first round of this process that saw it so; 0 when there is
+  none. A busy pool always has a machine that just stopped, so `matchstick_machines{state="stopped"}` cannot say
+  whether one is left behind; this can (`matchstick_deletion_wait_seconds > 900`).
 - `RELEASE_E2E_ACK_TIMEOUT`, a repository variable for the release workflow (minutes; unset disables it): when set
   with `RELEASE_E2E_CONTEXT`, the end-to-end system must acknowledge the build within that time with any status of
   that context naming the staged chart's digest (`pending` as its test starts, or its result). A release that no

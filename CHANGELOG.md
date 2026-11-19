@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-19
+
 ### Added
 
 - `matchstick_deletion_wait_seconds`, per pool: how long its longest-waiting machine has been stopped, failed or

@@ -326,7 +326,8 @@ Creation pauses, in memory:
 
 - after `ErrCapacity`: 2 minutes, doubling up to 30, reset by a successful creation;
 - after three machines in a row deleted as unregistered: 10 minutes; a machine whose runner is online resets the count.
-  A deletion GitHub refused is not one.
+  A machine counts once GitHub removes its registration (without one, once it is deleted), so a machine the cloud then
+  fails to delete still counts; a deletion GitHub refused is not one.
 
 The pool's last activity, in memory: `SetDemand` records the time when demand is above 0 and when it falls to 0 (the
 end of the last job), and each round keeps the later of that and the decision's `spares.lastActive`.

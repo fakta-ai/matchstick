@@ -15,9 +15,9 @@ versions follow [Semantic Versioning](https://semver.org/).
   goes ahead only once GitHub removes the registration: a refusal keeps the machine and counts as seeing its runner
   online, so it stays until its job ends and goes as `finished`. A machine whose runner was seen online and has since
   been offline and idle for `registrationTimeout` is deleted as `offline` (a new reason in
-  `matchstick_deletions_total`), with the same guard. Only machines actually deleted as `unregistered` count toward
-  the pause after machines that never register. The planner's observation takes `lastOnline`, when each machine's
-  runner was last seen online or busy.
+  `matchstick_deletions_total`), with the same guard. Only `unregistered` deletions whose registration GitHub removed
+  (or that had none) count toward the pause after machines that never register. The planner's observation takes
+  `lastOnline`, when each machine's runner was last seen online or busy.
 
 ## [0.7.0] - 2026-11-24
 

@@ -490,6 +490,35 @@ func TestSuccessiveMachinesThatNeverConnectPauseCreation(t *testing.T) {
 	w.expectMachines(0)
 }
 
+// Machines whose runners never came online count toward the pause once GitHub has removed their registrations, even if
+// the cloud then fails to delete them: the next rounds see them running without registrations and delete them as
+// finished.
+func TestMachinesThatNeverRegisterPauseCreationEvenIfTheCloudFailsToDeleteThem(t *testing.T) {
+	w := newWorld(t)
+	w.pool.SetDemand(3)
+	w.round()
+	for _, m := range w.machineList() {
+		w.machines.SetState(m.Name, plan.Running) // boots, but its runner never comes online
+	}
+	w.clock.advance(11 * time.Minute)
+	failure := errors.New("cloud unavailable")
+	w.machines.Fail("delete", failure, failure, failure)
+	w.round()
+	w.expectMachines(3)
+	w.expectRunners(0)
+	if got := w.gauge(w.metrics.CreationPaused); got != 1 {
+		t.Fatalf("creation paused = %v, want 1", got)
+	}
+
+	w.round()
+	w.clock.advance(11 * time.Minute)
+	w.round()
+	w.expectMachines(0)
+	if got := w.counter(w.metrics.Deletions, "finished"); got != 3 {
+		t.Errorf("finished deletions = %v, want 3", got)
+	}
+}
+
 // GitHub's runner list can show a runner offline and idle while it runs a job, for many minutes, and refuse to remove
 // its registration all the while. A machine whose runner the pool saw busy is kept through that, also by a pool that
 // restarts meanwhile and never saw it online, and is deleted as finished once its job ends.

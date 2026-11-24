@@ -279,6 +279,11 @@ func (p *Pool) delete(ctx context.Context, d plan.Deletion) {
 		switch {
 		case err == nil:
 			p.metrics.Removals.WithLabelValues(p.settings.Name, string(d.Reason)).Inc()
+			// Counted now: if the cloud fails to delete the machine, the next rounds see it running without its
+			// registration and delete it as finished.
+			if d.Reason == plan.Unregistered {
+				p.countUnregistered()
+			}
 		case d.Guarded && errors.Is(err, github.ErrJobRunning):
 			// Whatever GitHub's runner list says of it, the runner is online: the next rounds count from now.
 			p.mu.Lock()
@@ -299,7 +304,7 @@ func (p *Pool) delete(ctx context.Context, d plan.Deletion) {
 	}
 	p.metrics.Deletions.WithLabelValues(p.settings.Name, string(d.Reason)).Inc()
 	log.Info("machine deleted")
-	if d.Reason == plan.Unregistered {
+	if d.Reason == plan.Unregistered && d.RunnerID == 0 {
 		p.countUnregistered()
 	}
 }
@@ -397,9 +402,9 @@ func (p *Pool) trackUnregistered(o plan.Observation) {
 	}
 }
 
-// countUnregistered counts a machine deleted because its runner never came online, and pauses creation when
-// unregisteredLimit have been in a row; the pause resets the count. A deletion GitHub refused is not counted: its
-// runner is running a job.
+// countUnregistered counts a machine whose runner never came online, once GitHub has removed its registration (or,
+// without one, once the machine is deleted), and pauses creation when unregisteredLimit have been in a row; the pause
+// resets the count. A deletion GitHub refused is not counted: its runner is running a job.
 func (p *Pool) countUnregistered() {
 	p.mu.Lock()
 	defer p.mu.Unlock()

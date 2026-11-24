@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -487,6 +488,149 @@ func TestSuccessiveMachinesThatNeverConnectPauseCreation(t *testing.T) {
 		t.Fatalf("creation paused = %v, want 1", got)
 	}
 	w.expectMachines(0)
+}
+
+// GitHub's runner list can show a runner offline and idle while it runs a job, for many minutes, and refuse to remove
+// its registration all the while. A machine whose runner the pool saw busy is kept through that, also by a pool that
+// restarts meanwhile and never saw it online, and is deleted as finished once its job ends.
+func TestAMachineWhoseBusyRunnerIsListedOfflineIsKeptUntilItsJobEnds(t *testing.T) {
+	s := settings
+	s.Limits.Maximum = 1 // no replacement is made while GitHub refuses
+	w := newWorldWith(t, s)
+	name := w.created(1)[0]
+	w.expectClaim(name, w.machines.Proof(name)) // its configuration is released
+	w.boot()
+	w.startJob()
+	w.round() // the pool sees it busy
+	w.clock.advance(3 * time.Minute)
+	w.runners.Misreport(name, false, false)
+	asked := 0
+	for range 50 { // 25 minutes: the job runs on, well past the registration timeout
+		w.clock.advance(30 * time.Second)
+		asked += len(w.round().Deletions)
+		w.expectMachines(1)
+	}
+	if got := w.counter(w.metrics.Deletions, "unregistered") + w.counter(w.metrics.Deletions, "offline"); got != 0 {
+		t.Errorf("unregistered and offline deletions = %v, want 0", got)
+	}
+	w.restart()
+	w.pool.SetDemand(1)
+	for range 4 {
+		w.clock.advance(30 * time.Second)
+		asked += len(w.round().Deletions)
+		w.expectMachines(1)
+	}
+	w.expectRunners(1)
+	// Each refusal counts as seeing the runner online: GitHub is asked again only a registration timeout later, and
+	// once by the new process, which had not seen it.
+	if asked != 3 {
+		t.Errorf("removals asked = %d, want 3", asked)
+	}
+	if got := w.gauge(w.metrics.CreationPaused); got != 0 {
+		t.Errorf("creation paused = %v, want 0", got)
+	}
+
+	w.finishJob(name)
+	w.pool.SetDemand(0)
+	w.round()
+	w.expectMachines(0)
+	if got := w.counter(w.metrics.Deletions, "finished"); got != 1 {
+		t.Errorf("finished deletions = %v, want 1", got)
+	}
+	if got := w.counter(w.metrics.Deletions, "unregistered") + w.counter(w.metrics.Deletions, "offline"); got != 0 {
+		t.Errorf("unregistered and offline deletions = %v, want 0", got)
+	}
+}
+
+// A machine is created and claims its configuration, and its runner takes a job, but GitHub's runner list never shows
+// the runner online. At the registration timeout GitHub refuses to remove the registration: the runner is running a
+// job. The machines are kept until their jobs end, and are no machines that never registered: creation is not paused.
+func TestAMachineWhoseRunnerWasNeverListedOnlineIsKeptWhileGitHubSaysItRunsAJob(t *testing.T) {
+	w := newWorld(t)
+	names := w.created(3)
+	for _, name := range names {
+		w.expectClaim(name, w.machines.Proof(name))
+		w.machines.SetState(name, plan.Running)
+		w.runners.SetRunner(name, true, true)   // takes a job...
+		w.runners.Misreport(name, false, false) // ...which the runner list never shows
+	}
+	for range 30 { // 15 minutes, past the registration timeout
+		w.clock.advance(30 * time.Second)
+		w.round()
+		w.expectMachines(3)
+	}
+	w.expectRunners(3)
+	if got := w.counter(w.metrics.Deletions, "unregistered"); got != 0 {
+		t.Errorf("unregistered deletions = %v, want 0", got)
+	}
+	if got := w.gauge(w.metrics.CreationPaused); got != 0 {
+		t.Errorf("creation paused = %v, want 0", got)
+	}
+
+	for _, name := range names {
+		w.finishJob(name)
+	}
+	w.pool.SetDemand(0)
+	w.round()
+	w.expectMachines(0)
+	if got := w.counter(w.metrics.Deletions, "finished"); got != 3 {
+		t.Errorf("finished deletions = %v, want 3", got)
+	}
+}
+
+func TestAMachineThatNeverRegisteredWaitsForItsRegistrationsRemoval(t *testing.T) {
+	w := newWorld(t)
+	name := w.created(1)[0]
+	w.machines.SetState(name, plan.Running) // boots, but its runner never comes online
+	w.clock.advance(11 * time.Minute)
+	w.runners.Fail("remove", errors.New("github unavailable"))
+	w.round()
+	if !slices.Contains(w.names(), name) {
+		t.Fatalf("machines = %v: %s deleted before its registration was removed", w.names(), name)
+	}
+	w.round()
+	if slices.Contains(w.names(), name) {
+		t.Fatalf("machines = %v: want %s deleted", w.names(), name)
+	}
+	if got := w.counter(w.metrics.Deletions, "unregistered"); got != 1 {
+		t.Errorf("unregistered deletions = %v, want 1", got)
+	}
+}
+
+// A runner that came online and is then offline and idle, its registration in place, can take no job: its machine is
+// deleted as offline a registration timeout after the pool last saw it online, and replaced. It did register, so
+// creation is not paused.
+func TestMachinesWhoseRunnersWentOfflineAreDeletedAfterTheTimeout(t *testing.T) {
+	w := newWorld(t)
+	names := w.created(3)
+	w.boot()
+	w.round() // the pool sees them online
+	for _, name := range names {
+		w.runners.SetRunner(name, false, false)
+	}
+	w.clock.advance(9 * time.Minute)
+	w.round()
+	w.expectMachines(3)
+
+	w.clock.advance(2 * time.Minute)
+	w.round()
+	for _, name := range names {
+		if slices.Contains(w.names(), name) {
+			t.Errorf("machines = %v: want %s deleted", w.names(), name)
+		}
+	}
+	w.round() // replaces them
+	w.expectMachines(3)
+	w.expectRunners(3) // theirs were removed, the replacements registered
+	if got := w.counter(w.metrics.Deletions, "offline"); got != 3 {
+		t.Errorf("offline deletions = %v, want 3", got)
+	}
+	if got := w.counter(w.metrics.Deletions, "unregistered"); got != 0 {
+		t.Errorf("unregistered deletions = %v, want 0", got)
+	}
+	if got := w.gauge(w.metrics.CreationPaused); got != 0 {
+		t.Errorf("creation paused = %v, want 0", got)
+	}
 }
 
 func TestDrainBeforeDemandIsKnown(t *testing.T) {

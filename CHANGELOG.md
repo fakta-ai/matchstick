@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-24
+
 ### Fixed
 
 - A machine whose runner is running a job is no longer deleted as `unregistered`. GitHub's runner list can show a

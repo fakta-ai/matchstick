@@ -5,7 +5,7 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [0.7.0] - 2026-11-19
+## [0.7.0] - 2026-11-24
 
 ### Added
 

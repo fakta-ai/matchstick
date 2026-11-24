@@ -78,6 +78,11 @@ type Observation struct {
 	// on its way to power off. A running machine without its registration that is missing here counts from its
 	// creation.
 	Deregistered map[string]time.Time `json:"deregistered,omitempty"`
+	// LastOnline is when the pool's process last saw each machine's runner online or busy, or GitHub refuse to remove
+	// its registration because the runner is running a job. GitHub's runner list can show a runner offline and idle
+	// while it runs a job, so a runner seen online once is never taken for one that never came online. A machine
+	// missing here has not been seen so by this process.
+	LastOnline map[string]time.Time `json:"lastOnline,omitempty"`
 }
 
 // SparesReason says why the pool keeps the spares it keeps now.
@@ -148,9 +153,13 @@ const (
 	Finished Reason = "finished"
 	// Expired means the machine outlived the pool's maximum lifetime.
 	Expired Reason = "expired"
-	// Unregistered means the machine's runner did not come online within the registration timeout: the machine is
-	// still pending, or its registration is offline and idle.
+	// Unregistered means the machine's runner did not come online within the registration timeout, as far as the
+	// pool's process saw: the machine is still pending, or its registration is offline and idle and was never seen
+	// online or busy.
 	Unregistered Reason = "unregistered"
+	// Offline means the machine's runner came online and has been offline and idle for longer than the registration
+	// timeout since the pool's process last saw it online or busy.
+	Offline Reason = "offline"
 	// Orphan means the registration has no machine.
 	Orphan Reason = "orphan"
 	// Surplus means the pool has more idle machines than it needs.
@@ -221,8 +230,14 @@ func Decide(o Observation, l Limits) Decision {
 				continue
 			}
 			deletion.Reason = Finished
-		case o.Runners != nil && (!registered || !r.Online && !r.Busy) && o.Now.Sub(m.CreatedAt) > timeout:
-			deletion.Reason = Unregistered
+		case o.Runners != nil && (!registered || !r.Online && !r.Busy) && o.Now.Sub(lastOnline(o, m)) > timeout:
+			// Not online for the registration timeout: since its creation if never seen online, unregistered, else
+			// since it was last seen so. GitHub's runner list can show a runner offline and idle while it runs a
+			// job, so the deletion is guarded: GitHub refuses to remove the registration of a runner running a job.
+			deletion.Reason, deletion.Guarded = Unregistered, true
+			if _, seen := o.LastOnline[m.Name]; seen {
+				deletion.Reason = Offline
+			}
 		default:
 			serving = append(serving, m)
 			continue
@@ -306,6 +321,36 @@ func Deregistered(since map[string]time.Time, o Observation) map[string]time.Tim
 		deregistered[m.Name] = first
 	}
 	return deregistered
+}
+
+// lastOnline is when the pool last saw m's runner online or busy, or m's creation if it has not.
+func lastOnline(o Observation, m Machine) time.Time {
+	if at, ok := o.LastOnline[m.Name]; ok {
+		return at
+	}
+	return m.CreatedAt
+}
+
+// LastOnline returns when each machine the observation lists was last seen with its runner online or busy: now for
+// one whose runner is online or busy in the observation, else its time in since. Machines never seen so, or no longer
+// listed, are left out. Without the runner list it returns since unchanged, as nothing can be told.
+func LastOnline(since map[string]time.Time, o Observation) map[string]time.Time {
+	if o.Runners == nil {
+		return since
+	}
+	online := make(map[string]bool, len(o.Runners))
+	for _, r := range o.Runners {
+		online[r.Name] = r.Online || r.Busy
+	}
+	last := map[string]time.Time{}
+	for _, m := range o.Machines {
+		if online[m.Name] {
+			last[m.Name] = o.Now
+		} else if at, seen := since[m.Name]; seen {
+			last[m.Name] = at
+		}
+	}
+	return last
 }
 
 // Leaving returns when each machine the observation lists stopped, failed or being deleted was first seen so (its time

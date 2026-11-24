@@ -5,6 +5,20 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A machine whose runner is running a job is no longer deleted as `unregistered`. GitHub's runner list can show a
+  runner offline and idle while it runs a job, for many minutes, and a machine older than `registrationTimeout` whose
+  runner the list showed so was deleted at once, even when GitHub refused to remove its registration because the
+  runner was running a job ("deleting the machine anyway"); its job then failed with the runner's lost connection.
+  Now `unregistered` applies only to a machine whose runner this process never saw online or busy, and its deletion
+  goes ahead only once GitHub removes the registration: a refusal keeps the machine and counts as seeing its runner
+  online, so it stays until its job ends and goes as `finished`. A machine whose runner was seen online and has since
+  been offline and idle for `registrationTimeout` is deleted as `offline` (a new reason in
+  `matchstick_deletions_total`), with the same guard. Only `unregistered` deletions whose registration GitHub removed
+  (or that had none) count toward the pause after machines that never register. The planner's observation takes
+  `lastOnline`, when each machine's runner was last seen online or busy.
+
 ## [0.7.0] - 2026-11-24
 
 ### Added

@@ -255,18 +255,25 @@ delete and registrations to remove, each with a reason, and how many machines to
 The observation holds the current time, the pool's machines (name, state, creation time, expiry), its runner
 registrations (id, name, creation time from the name, online, busy) or `null` when GitHub's list could not be read,
 its demand (jobs assigned, waiting or running) or `null` when unknown, whether the pool drains, whether creation is
-paused, when the process last saw the pool with a job (`lastActive`), when the process started (`started`), and when
-it first saw each running machine without its runner's registration (`deregistered`). The limits are the maximum
-number of machines, the number of idle spares, the registration timeout, and the idle timeout.
+paused, when the process last saw the pool with a job (`lastActive`), when the process started (`started`), when it
+first saw each running machine without its runner's registration (`deregistered`), and when it last saw each
+machine's runner online or busy (`lastOnline`). The limits are the maximum number of machines, the number of idle
+spares, the registration timeout, and the idle timeout.
 
 GitHub removes a just-in-time runner's registration when its job ends, so a running machine without its registration
 has run its job, however long that took, and is on its way to power off.
+
+GitHub's runner list can show a runner offline and idle while it runs a job, for many minutes, while GitHub still
+refuses to remove its registration because the runner is running a job. So the list's status alone deletes no
+machine: the deletions it leads to are guarded, and a runner seen online once is never taken for one that never came
+online.
 
 | Rule | Condition | Action |
 |---|---|---|
 | finished | machine stopped or failed; or running without its registration for longer than the registration timeout since `deregistered` (its creation if the observation has no time for it): its job ended and it did not power off | remove its registration if any, delete the machine |
 | expired | now is past the machine's expiry | remove its registration if any, delete the machine, even mid-job |
-| unregistered | machine older than the registration timeout whose runner never came online: still pending, or its registration offline and idle | remove the registration if any, delete the machine |
+| unregistered | machine older than the registration timeout whose runner was never seen online (not in `lastOnline`): still pending, or its registration offline and idle | remove the registration if any, then delete the machine (guarded) |
+| offline | machine whose runner was seen online, now offline and idle, for longer than the registration timeout since `lastOnline` | remove the registration if any, then delete the machine (guarded) |
 | orphan | registration older than the registration timeout with no machine of its name | remove the registration |
 | surplus | more serving machines than wanted | for idle, online registrations, oldest first: remove the registration, then delete the machine (guarded) |
 | needed | fewer serving machines than wanted | create machines |
@@ -288,11 +295,12 @@ Counting:
 - creates = `min(wanted − serving, maximum − present)`, at least 0; none while demand is unknown or creation is paused.
 - surplus deletions happen only when demand is known or the pool drains.
 - machines being deleted are left alone but counted in `present`.
-- with the registration list unknown, the unregistered, orphan and surplus rules are skipped.
+- with the registration list unknown, the unregistered, offline, orphan and surplus rules are skipped.
 
 A guarded deletion is carried out only once the registration is removed. GitHub refuses to remove the registration of
-a runner that is running a job, so a guarded deletion never cuts a job short. The other deletions delete the machine
-whatever GitHub answers.
+a runner that is running a job, so a guarded deletion never cuts a job short. The other deletions (finished,
+expired) delete the machine whatever GitHub answers: a finished machine has no job left to run, and the maximum
+lifetime holds even mid-job.
 
 ## A round
 
@@ -304,10 +312,11 @@ whatever GitHub answers.
 2. **Decide**: `plan.Decide`. The pool drops the configurations it holds for machines the decision deletes and for
    machines older than the registration timeout.
 3. **Act**, at most four calls at once, for at most five minutes: registration removals and deletions, then
-   creations. A deletion with a registration removes it first; a guarded one stops if GitHub refuses. A creation
-   registers a runner under a new name, holds its JIT configuration, then creates the machine with its bootstrap and an
-   expiry of now plus the pool's maximum lifetime; if the cloud refuses, the configuration is dropped and the
-   registration removed at once (the orphan rule removes it later if that fails too).
+   creations. A deletion with a registration removes it first; a guarded one stops if GitHub refuses, and a refusal
+   because the runner is running a job counts as seeing the runner online (`lastOnline`). A creation registers a
+   runner under a new name, holds its JIT configuration, then creates the machine with its bootstrap and an expiry of
+   now plus the pool's maximum lifetime; if the cloud refuses, the configuration is dropped and the registration
+   removed at once (the orphan rule removes it later if that fails too).
 
 A drain or pause that begins during a round stops the creations it has not started. Nothing is retried within a
 round; the next round observes again and plans again. `Pool.Run` runs a round at once,
@@ -317,12 +326,17 @@ Creation pauses, in memory:
 
 - after `ErrCapacity`: 2 minutes, doubling up to 30, reset by a successful creation;
 - after three machines in a row deleted as unregistered: 10 minutes; a machine whose runner is online resets the count.
+  A machine counts once GitHub removes its registration (without one, once it is deleted), so a machine the cloud then
+  fails to delete still counts; a deletion GitHub refused is not one.
 
 The pool's last activity, in memory: `SetDemand` records the time when demand is above 0 and when it falls to 0 (the
 end of the last job), and each round keeps the later of that and the decision's `spares.lastActive`.
 
 When the pool first saw each running machine without its runner's registration, in memory (`plan.Deregistered`, kept
 by each round): a machine that has its registration again, stops or goes is dropped from it.
+
+When the pool last saw each machine's runner online or busy, in memory (`plan.LastOnline`, kept by each round, and set
+by each deletion GitHub refuses because the runner is running a job): a machine that goes is dropped from it.
 
 Machines on their way out, in memory: each round records when it first saw each listed machine stopped, failed or
 being deleted (`plan.Leaving`), forgets those no longer listed, and reports the longest wait as
@@ -331,8 +345,10 @@ on its way out until the cloud reports it stopped. A round that cannot list the 
 
 A new `Pool` over the same cloud and GitHub starts with demand unknown, no configurations, no last activity, no
 deregistration times (a running machine without its registration then has the registration timeout from the first
-round) and no machines on their way out (it counts their wait from its first round): its first round cleans up
-(finished, expired, unregistered, orphan) and creates nothing until demand is set.
+round), no last-online times (a machine whose runner is listed offline and idle then counts from its creation, as
+unregistered, and its deletion waits on GitHub's removal of the registration like any guarded one) and no machines on
+their way out (it counts their wait from its first round): its first round cleans up (finished, expired,
+unregistered, orphan) and creates nothing until demand is set.
 
 ## Operations
 

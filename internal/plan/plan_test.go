@@ -86,7 +86,7 @@ func TestDecide(t *testing.T) {
 			obs: Observation{Now: now, Demand: new(2), Runners: []Runner{},
 				Machines: []Machine{machine("a", Pending, 11*time.Minute), machine("b", Pending, 9*time.Minute)}},
 			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 2, Deletions: []Deletion{
-				{Machine: "a", Reason: Unregistered}}},
+				{Machine: "a", Reason: Unregistered, Guarded: true}}},
 		},
 		{
 			// GitHub removes a just-in-time runner's registration when its job ends, however long the job ran.
@@ -139,7 +139,23 @@ func TestDecide(t *testing.T) {
 				Runners: []Runner{{ID: 1, Name: "a", CreatedAt: ago(11 * time.Minute)},
 					{ID: 2, Name: "b", CreatedAt: ago(9 * time.Minute)}}},
 			want: Decision{Wanted: 1, Serving: 1, Present: 2, Deletions: []Deletion{
-				{Machine: "a", Reason: Unregistered, RunnerID: 1}}},
+				{Machine: "a", Reason: Unregistered, RunnerID: 1, Guarded: true}}},
+		},
+		{
+			// GitHub's runner list can show a runner offline and idle while it runs a job: a runner seen online counts
+			// from when it was last seen so, and either deletion goes ahead only once GitHub removes the registration,
+			// which it refuses while the runner runs a job.
+			name: "a runner listed offline and idle: unregistered if never seen online, else offline, both guarded",
+			obs: Observation{Now: now, Demand: new(3),
+				Machines: []Machine{machine("never", Running, 40*time.Minute), machine("lost", Running, 40*time.Minute),
+					machine("recent", Running, 40*time.Minute)},
+				Runners: []Runner{{ID: 1, Name: "never", CreatedAt: ago(40 * time.Minute)},
+					{ID: 2, Name: "lost", CreatedAt: ago(40 * time.Minute)},
+					{ID: 3, Name: "recent", CreatedAt: ago(40 * time.Minute)}},
+				LastOnline: map[string]time.Time{"lost": ago(11 * time.Minute), "recent": ago(9 * time.Minute)}},
+			want: Decision{Create: 1, Wanted: 3, Serving: 1, Present: 3, Deletions: []Deletion{
+				{Machine: "never", Reason: Unregistered, RunnerID: 1, Guarded: true},
+				{Machine: "lost", Reason: Offline, RunnerID: 2, Guarded: true}}},
 		},
 		{
 			name: "unregistered rule is skipped while the runner list is unknown",
@@ -282,6 +298,29 @@ func TestDeregistered(t *testing.T) {
 	}
 }
 
+func TestLastOnline(t *testing.T) {
+	o := Observation{Now: now,
+		Machines: []Machine{machine("busy", Running, time.Hour), machine("idle", Running, time.Minute),
+			machine("listed-offline", Running, time.Hour), machine("never", Running, time.Minute),
+			machine("ended", Running, time.Hour)},
+		Runners: []Runner{runner(1, "busy", time.Hour, true), runner(2, "idle", time.Minute, false),
+			{ID: 3, Name: "listed-offline", CreatedAt: ago(time.Hour)}, {ID: 4, Name: "never", CreatedAt: ago(time.Minute)}}}
+	since := map[string]time.Time{"busy": ago(time.Minute), "listed-offline": ago(5 * time.Minute),
+		"ended": ago(2 * time.Minute), "gone": ago(time.Minute)}
+	// Online or busy now: now. Listed offline, or without its registration, after being seen online: as it was.
+	// Never seen online, or no longer listed: left out.
+	want := map[string]time.Time{"busy": now, "idle": now, "listed-offline": ago(5 * time.Minute),
+		"ended": ago(2 * time.Minute)}
+	if got := LastOnline(since, o); !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+	// Without the runner list nothing can be told: the record stays as it was.
+	o.Runners = nil
+	if got := LastOnline(since, o); !reflect.DeepEqual(got, since) {
+		t.Errorf("without the runner list: got %v, want %v", got, since)
+	}
+}
+
 // idle is a pool that keeps two spares while it has jobs and for 30 minutes after the last.
 var idle = Limits{Maximum: 4, Spares: 2, RegistrationTimeout: Duration(10 * time.Minute),
 	IdleTimeout: Duration(30 * time.Minute)}
@@ -409,7 +448,7 @@ func TestIdleTimeout(t *testing.T) {
 			want: Decision{Create: 1, Wanted: 2, Serving: 1, Present: 2,
 				Spares: Spares{Count: 2, Reason: SparesRecent, LastActive: ago(5 * time.Minute),
 					Until: now.Add(25 * time.Minute)},
-				Deletions: []Deletion{{Machine: "s1", Reason: Unregistered, RunnerID: 3}}},
+				Deletions: []Deletion{{Machine: "s1", Reason: Unregistered, RunnerID: 3, Guarded: true}}},
 		},
 		{
 			name: "after a restart, the newest machine made before it stands for the last job",

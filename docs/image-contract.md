@@ -56,7 +56,10 @@ does the rest.
 ## Timing
 
 - The runner must be online within the pool's `registrationTimeout` (default 10 minutes) of the VM's creation, or
-  matchstick deletes the VM and its registration. matchstick refuses claims after that time.
+  matchstick deletes the VM and its registration. matchstick refuses claims after that time. A runner that was online
+  and has been offline and idle for `registrationTimeout` is deleted the same way. Neither deletes a VM whose runner
+  GitHub says is running a job: matchstick removes the registration first, which GitHub refuses while a job runs,
+  whatever its runner list shows.
 - A VM whose runner's job has ended, which matchstick sees as its registration gone, is left to power off: matchstick
   deletes it at its next round once it stops, or once the pool's `registrationTimeout` has passed since matchstick
   first saw its registration gone, however long the job ran.

@@ -19,13 +19,18 @@ type Runners struct {
 	nextID   int64
 	runners  map[int64]plan.Runner
 	failures map[string][]error
+	// listed is the status List shows instead of a runner's own, by name (Misreport).
+	listed map[string]status
 }
+
+type status struct{ online, busy bool }
 
 var _ github.Runners = (*Runners)(nil)
 
 // New returns registrations holding the given runners. now stamps new registrations.
 func New(now func() time.Time, runners ...plan.Runner) *Runners {
-	r := &Runners{now: now, nextID: 1, runners: map[int64]plan.Runner{}, failures: map[string][]error{}}
+	r := &Runners{now: now, nextID: 1, runners: map[int64]plan.Runner{}, failures: map[string][]error{},
+		listed: map[string]status{}}
 	for _, runner := range runners {
 		r.runners[runner.ID] = runner
 		r.nextID = max(r.nextID, runner.ID+1)
@@ -62,7 +67,7 @@ func (r *Runners) JITConfig(_ context.Context, name string) (github.JIT, error) 
 	return github.JIT{RunnerID: id, Config: "jit:" + name}, nil
 }
 
-// List returns the registrations sorted by name.
+// List returns the registrations sorted by name, each with the status Misreport set for it, if any.
 func (r *Runners) List(context.Context) ([]plan.Runner, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -71,6 +76,9 @@ func (r *Runners) List(context.Context) ([]plan.Runner, error) {
 	}
 	runners := make([]plan.Runner, 0, len(r.runners))
 	for _, runner := range r.runners {
+		if s, ok := r.listed[runner.Name]; ok {
+			runner.Online, runner.Busy = s.online, s.busy
+		}
 		runners = append(runners, runner)
 	}
 	slices.SortFunc(runners, func(a, b plan.Runner) int { return strings.Compare(a.Name, b.Name) })
@@ -91,7 +99,8 @@ func (r *Runners) Remove(_ context.Context, id int64) error {
 	return nil
 }
 
-// SetRunner changes a registration's status, as GitHub would when its runner connects or takes a job.
+// SetRunner changes a registration's status, as GitHub would when its runner connects or takes a job. List shows it
+// from then on, ending any Misreport of the runner.
 func (r *Runners) SetRunner(name string, online, busy bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -99,10 +108,20 @@ func (r *Runners) SetRunner(name string, online, busy bool) {
 		if runner.Name == name {
 			runner.Online, runner.Busy = online, busy
 			r.runners[id] = runner
+			delete(r.listed, name)
 			return
 		}
 	}
 	panic("fake: no runner " + name)
+}
+
+// Misreport makes List show the runner with this status, while Remove still answers by the runner's own, until
+// SetRunner or Finish: GitHub's runner list can show a runner offline and idle while it runs a job, and refuse to
+// remove its registration meanwhile.
+func (r *Runners) Misreport(name string, online, busy bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.listed[name] = status{online: online, busy: busy}
 }
 
 // Finish removes a runner's registration, as GitHub does when an ephemeral runner completes its job.
@@ -112,6 +131,7 @@ func (r *Runners) Finish(name string) {
 	for id, runner := range r.runners {
 		if runner.Name == name {
 			delete(r.runners, id)
+			delete(r.listed, name)
 			return
 		}
 	}

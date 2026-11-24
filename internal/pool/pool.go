@@ -50,9 +50,9 @@ type Claim struct {
 }
 
 // Pool is one pool's loop and the little it remembers between rounds: demand, drain, backoff, when it last saw the
-// pool with a job, when it first saw each running machine without its runner's registration, when it first saw each
-// machine that is on its way out, and the runner configurations of machines that have not claimed theirs yet. All of
-// it is rebuilt or reset harmlessly after a restart.
+// pool with a job, when it first saw each running machine without its runner's registration, when it last saw each
+// machine's runner online, when it first saw each machine that is on its way out, and the runner configurations of
+// machines that have not claimed theirs yet. All of it is rebuilt or reset harmlessly after a restart.
 type Pool struct {
 	settings Settings
 	machines provider.Provider
@@ -79,13 +79,17 @@ type Pool struct {
 	leaving map[string]time.Time
 	// deregistered is when each running machine without its runner's registration was first seen so.
 	deregistered map[string]time.Time
+	// lastOnline is when each machine's runner was last seen online or busy, or GitHub refused to remove its
+	// registration because it was running a job. Round replaces it; delete adds the refusals.
+	lastOnline map[string]time.Time
 }
 
 // New returns a pool. now is the clock; tests pass their own.
 func New(s Settings, machines provider.Provider, runners github.Runners, m *metrics.Metrics, log *slog.Logger,
 	now func() time.Time) *Pool {
 	return &Pool{settings: s, machines: machines, runners: runners, metrics: m, now: now, started: now(),
-		log: log.With("pool", s.Name), wake: make(chan struct{}, 1), held: map[string]held{}}
+		log: log.With("pool", s.Name), wake: make(chan struct{}, 1), held: map[string]held{},
+		lastOnline: map[string]time.Time{}}
 }
 
 // Name returns the pool's name.
@@ -185,6 +189,7 @@ func (p *Pool) Observe(ctx context.Context) (plan.Observation, error) {
 	o.CreationPaused = o.Now.Before(p.pausedUntil)
 	o.LastActive, o.Started = p.lastActive, p.started
 	o.Deregistered = plan.Deregistered(p.deregistered, o)
+	o.LastOnline = plan.LastOnline(p.lastOnline, o)
 	return o, nil
 }
 
@@ -199,6 +204,7 @@ func (p *Pool) Round(ctx context.Context) (plan.Decision, error) {
 	p.mu.Lock()
 	p.lastSuccess = o.Now
 	p.deregistered = o.Deregistered
+	p.lastOnline = o.LastOnline
 	p.mu.Unlock()
 	p.metrics.LastSuccess.WithLabelValues(p.settings.Name).Set(float64(o.Now.Unix()))
 	d := plan.Decide(o, p.settings.Limits)
@@ -213,7 +219,7 @@ func (p *Pool) Round(ctx context.Context) (plan.Decision, error) {
 	var wait time.Duration
 	p.leaving, wait = plan.Leaving(p.leaving, o)
 	p.metrics.DeletionWait.WithLabelValues(p.settings.Name).Set(wait.Seconds())
-	p.trackUnregistered(o, d)
+	p.trackUnregistered(o)
 	actCtx, cancel := context.WithTimeout(ctx, ActTimeout)
 	p.act(actCtx, d)
 	cancel()
@@ -273,8 +279,17 @@ func (p *Pool) delete(ctx context.Context, d plan.Deletion) {
 		switch {
 		case err == nil:
 			p.metrics.Removals.WithLabelValues(p.settings.Name, string(d.Reason)).Inc()
+			// Counted now: if the cloud fails to delete the machine, the next rounds see it running without its
+			// registration and delete it as finished.
+			if d.Reason == plan.Unregistered {
+				p.countUnregistered()
+			}
 		case d.Guarded && errors.Is(err, github.ErrJobRunning):
-			log.Info("runner took a job; keeping its machine")
+			// Whatever GitHub's runner list says of it, the runner is online: the next rounds count from now.
+			p.mu.Lock()
+			p.lastOnline[d.Machine] = p.now()
+			p.mu.Unlock()
+			log.Info("runner is running a job; keeping its machine")
 			return
 		case d.Guarded:
 			log.Warn("registration removal failed; keeping the machine for now", "error", err)
@@ -289,6 +304,9 @@ func (p *Pool) delete(ctx context.Context, d plan.Deletion) {
 	}
 	p.metrics.Deletions.WithLabelValues(p.settings.Name, string(d.Reason)).Inc()
 	log.Info("machine deleted")
+	if d.Reason == plan.Unregistered && d.RunnerID == 0 {
+		p.countUnregistered()
+	}
 }
 
 func (p *Pool) create(ctx context.Context) {
@@ -361,9 +379,9 @@ func (p *Pool) pauseLocked(d time.Duration, why string) {
 	}
 }
 
-// trackUnregistered counts machines deleted in a row because they never registered, and pauses creation when
-// unregisteredLimit have. A machine whose runner is online resets the count, and so does the pause.
-func (p *Pool) trackUnregistered(o plan.Observation, d plan.Decision) {
+// trackUnregistered resets the count of machines deleted in a row as unregistered when a machine's runner is online,
+// and clears the pause gauge once the pause is over.
+func (p *Pool) trackUnregistered(o plan.Observation) {
 	if o.Runners == nil {
 		return
 	}
@@ -379,17 +397,21 @@ func (p *Pool) trackUnregistered(o plan.Observation, d plan.Decision) {
 			break
 		}
 	}
-	for _, del := range d.Deletions {
-		if del.Reason == plan.Unregistered {
-			p.unregistered++
-		}
+	if !o.Now.Before(p.pausedUntil) {
+		p.metrics.CreationPaused.WithLabelValues(p.settings.Name).Set(0)
 	}
+}
+
+// countUnregistered counts a machine whose runner never came online, once GitHub has removed its registration (or,
+// without one, once the machine is deleted), and pauses creation when unregisteredLimit have been in a row; the pause
+// resets the count. A deletion GitHub refused is not counted: its runner is running a job.
+func (p *Pool) countUnregistered() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.unregistered++
 	if p.unregistered >= unregisteredLimit {
 		p.unregistered = 0
 		p.pauseLocked(unregisteredPause, "machines do not register")
-	}
-	if !o.Now.Before(p.pausedUntil) {
-		p.metrics.CreationPaused.WithLabelValues(p.settings.Name).Set(0)
 	}
 }
 

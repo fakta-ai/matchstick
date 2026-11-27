@@ -169,7 +169,25 @@ more than 30 minutes; `increase(matchstick_deletions_total{reason="unregistered"
 reopened after a backoff that starts at 5 seconds, so a brief 0 does not fire it);
 `min_over_time(matchstick_runners{status="idle"}[30m]) > ignoring(status) max_over_time(matchstick_spares[30m])`, a
 pool that has held more idle runners than it keeps spares for 30 minutes, such as idle machines it cannot delete
-(`ignoring(status)` because `matchstick_spares` has no `status` label; without it the comparison matches nothing).
+(`ignoring(status)` because `matchstick_spares` has no `status` label; without it the comparison matches nothing);
+machines made without a job starting on them, for 15 minutes:
+
+```promql
+(
+  sum by (pool) (increase(matchstick_creations_total[1h]))
+  - (
+    sum by (pool) (increase(matchstick_job_startup_seconds_count[1h]))
+    or 0 * sum by (pool) (increase(matchstick_creations_total[1h]))
+  )
+) > 12
+```
+
+Each machine runs one job, so on a working pool the two counts differ only by the spares deleted unused after the idle
+timeout and the machines still booting. A machine whose claim is refused, or whose runner exits before taking a job,
+powers itself off and is deleted as `finished`, like one whose job ended: neither the `unregistered` alert nor the
+creation pause counts it, so a pool can replace such machines in a loop. The `or` keeps a pool that has started no job
+since matchstick started, which has no `matchstick_job_startup_seconds` series yet; raise the 12 for a pool with many
+spares and a short idle timeout.
 
 ## Looking
 

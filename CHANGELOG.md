@@ -5,6 +5,13 @@ versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- [docs/operations.md](docs/operations.md) suggests an alert on machines made without a job starting on them: a pool's
+  creations in the last hour less its jobs started. A machine whose claim is refused or whose runner exits before
+  taking a job powers itself off and is deleted as `finished`, which neither the `unregistered` alert nor the creation
+  pause counts, so a pool replacing such machines in a loop showed in no suggested alert.
+
 ## [0.7.1] - 2026-11-24
 
 ### Fixed
